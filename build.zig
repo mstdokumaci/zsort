@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -59,27 +58,6 @@ pub fn build(b: *std.Build) void {
     run_fix_imports.addArgs(&.{ "fix", "src", "--ban-prefix", "./", "--ban-prefix", "src/" });
     const fix_imports_step = b.step("fix-imports", "Fix Zig import ordering in this repo");
     fix_imports_step.dependOn(&run_fix_imports.step);
-
-    // Zwanzig's analyzer and build.zig are not Zig 0.16 compatible
-    // (std.fs was removed). Gate the dependency to <0.16; on 0.16 the lint
-    // step only runs the dogfood import check.
-    if (comptime builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16) {
-        const lint_step = b.step("lint", "Run zsort check-imports on the repo");
-        lint_step.dependOn(&check_imports.step);
-    } else {
-        if (b.lazyDependency("zwanzig", .{
-            .target = b.graph.host,
-            .optimize = .ReleaseFast,
-        })) |zwanzig| {
-            const run_zwanzig = b.addRunArtifact(zwanzig.artifact("zwanzig"));
-            run_zwanzig.setCwd(b.path("."));
-
-            run_zwanzig.addArgs(&.{ "src", "build.zig" });
-            const lint_step = b.step("lint", "Run Zwanzig on the whole repo");
-            lint_step.dependOn(&run_zwanzig.step);
-            lint_step.dependOn(&check_imports.step);
-        }
-    }
 
     // `zig build check` is not built-in on 0.15.2; define a compile-only step
     // covering the exe, the library module, and the tests.

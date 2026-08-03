@@ -1,0 +1,16 @@
+.{
+    .name = .consumer,
+    .version = "0.0.0",
+    .fingerprint = 0x705b372709b4bf0c,
+    .dependencies = .{
+        .zsort = .{
+            .path = "../..",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

@@ -8,9 +8,73 @@ attached comments travel with their imports.
 
 ## Requirements
 
-- Zig **0.15.2 or newer** (0.16 support is in progress)
+- Zig **0.15.2 or newer** (Zig 0.16 is supported)
 
 ## Installation
+
+There are two ways to get `zsort`.
+
+### Homebrew
+
+```sh
+brew tap mstdokumaci/zsort
+brew install zsort
+```
+
+This installs a `zsort` binary built from source with the Homebrew-provided
+Zig. No cask or prebuilt bottles involved.
+
+### As a Zig package
+
+Add zsort to your `build.zig.zon` (run `zig fetch --save` to fill in the
+hash):
+
+```zig
+.{
+    .name = .my_project,
+    .version = "0.0.0",
+    .fingerprint = 0x..., // your own
+    .dependencies = .{
+        .zsort = .{
+            .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "...",
+            .lazy = true,
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}
+```
+
+Then wire up the `check-imports` and `fix-imports` steps in `build.zig`:
+
+```zig
+const zsort = b.lazyDependency("zsort", .{
+    .target = b.graph.host,
+    .optimize = .ReleaseFast,
+});
+if (zsort) |dep| {
+    const zsort_exe = dep.artifact("zsort");
+
+    const check_imports = b.addRunArtifact(zsort_exe);
+    check_imports.setCwd(b.path("."));
+    check_imports.addArgs(&.{ "check", "src", "--ban-prefix", "./", "--ban-prefix", "src/" });
+    const check_imports_step = b.step("check-imports", "Run zsort check on this project");
+    check_imports_step.dependOn(&check_imports.step);
+
+    const run_fix_imports = b.addRunArtifact(zsort_exe);
+    run_fix_imports.setCwd(b.path("."));
+    run_fix_imports.addArgs(&.{ "fix", "src", "--ban-prefix", "./", "--ban-prefix", "src/" });
+    const fix_imports_step = b.step("fix-imports", "Fix Zig import ordering in this project");
+    fix_imports_step.dependOn(&run_fix_imports.step);
+}
+```
+
+Adjust the `--ban-prefix` flags and target paths to your project. The first
+`zig build check-imports` or `zig build fix-imports` run fetches zsort
+automatically. The `test/consumer/` project in this repo is a working copy of
+this setup.
+
+### From source
 
 ```sh
 zig build -Doptimize=ReleaseFast
@@ -86,14 +150,26 @@ paths, along with `.git`, `.zig-cache`, `zig-cache`, and `zig-out`.
 ```sh
 zig build test             # unit tests
 zig build check-imports    # run zsort on its own source (dogfood)
-zig build lint             # zwanzig, whole repo
 zig fmt --check src        # formatting
 ```
 
-Linting uses [zwanzig](https://github.com/forketyfork/zwanzig). The repo is
-also linted with [zlint](https://github.com/DonIsaac/zlint):
+Linting uses [zwanzig](https://github.com/forketyfork/zwanzig) and
+[zlint](https://github.com/DonIsaac/zlint), both run directly as pre-built
+binaries — there is no build step for them:
 
 ```sh
+# zwanzig — pick the asset for your platform:
+#   zwanzig-v0.14.0-linux-x86_64.tar.gz
+#   zwanzig-v0.14.0-macos-aarch64.tar.gz
+#   zwanzig-v0.14.0-windows-x86_64.zip
+curl -fsSL -o /tmp/zwanzig.tar.gz \
+  "https://github.com/forketyfork/zwanzig/releases/download/v0.14.0/zwanzig-v0.14.0-macos-aarch64.tar.gz"
+mkdir -p /tmp/zwanzig
+tar -xzf /tmp/zwanzig.tar.gz -C /tmp/zwanzig
+sudo mv /tmp/zwanzig/zwanzig /usr/local/bin/zwanzig
+
+zwanzig src build.zig
+
 zlint --deny-warnings
 ```
 

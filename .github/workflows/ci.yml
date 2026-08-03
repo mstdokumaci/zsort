@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ZLINT_VERSION: v0.9.1
+      ZWANZIG_VERSION: v0.14.0
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,12 +30,18 @@ jobs:
           curl -fsSL -o /tmp/zlint "https://github.com/DonIsaac/zlint/releases/download/${ZLINT_VERSION}/zlint-linux-x86_64"
           chmod +x /tmp/zlint
           sudo mv /tmp/zlint /usr/local/bin/zlint
+      - name: Install zwanzig (pinned)
+        run: |
+          curl -fsSL -o /tmp/zwanzig.tar.gz "https://github.com/forketyfork/zwanzig/releases/download/${ZWANZIG_VERSION}/zwanzig-${ZWANZIG_VERSION}-linux-x86_64.tar.gz"
+          mkdir -p /tmp/zwanzig
+          tar -xzf /tmp/zwanzig.tar.gz -C /tmp/zwanzig
+          sudo mv /tmp/zwanzig/zwanzig /usr/local/bin/zwanzig
       - name: Lint chain
         run: |
           zig build check-imports
           zig fmt --check src
           zlint --deny-warnings
-          zig build lint
+          zwanzig src build.zig
           zig build check --summary all
 
   test:
@@ -48,7 +55,6 @@ jobs:
           - { os: macos-latest, zig: 0.16.0 }
           - { os: macos-15-intel, zig: 0.15.2 }
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.zig == '0.16.0' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,3 +64,32 @@ jobs:
           version: ${{ matrix.zig }}
       - run: zig build test --summary all
       - run: zig build check --summary all
+
+  package-consumer:
+    strategy:
+      fail-fast: false
+      matrix:
+        zig: [0.15.2, 0.16.0]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ matrix.zig }}
+      - name: Exercise zsort as a package dependency
+        run: |
+          set -euo pipefail
+          cd test/consumer
+          zig build fix-imports
+          zig build check-imports
+          if git diff --quiet -- src; then
+            echo "expected fix-imports to modify the unsorted fixture" >&2
+            exit 1
+          fi
+          git checkout -- src
+          if zig build check-imports; then
+            echo "expected check-imports to fail on the unsorted fixture" >&2
+            exit 1
+          fi
