@@ -1,0 +1,44 @@
+name: CI
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      ZLINT_VERSION: v0.9.1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Install zlint (pinned)
+        run: |
+          curl -fsSL -o /tmp/zlint "https://github.com/DonIsaac/zlint/releases/download/${ZLINT_VERSION}/zlint-linux-x86_64"
+          chmod +x /tmp/zlint
+          sudo mv /tmp/zlint /usr/local/bin/zlint
+      - name: Lint chain
+        run: |
+          zig build check-imports
+          zig fmt --check src
+          zlint --deny-warnings
+          zig build lint
+          zig build check --summary all
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-13]
+        zig: [0.15.2, 0.16.0]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.zig == '0.16.0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ matrix.zig }}
+      - run: zig build test --summary all
+      - run: zig build check --summary all
