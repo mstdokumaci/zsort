@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const compat = @import("compat.zig");
 const zsort = @import("zsort.zig");
 
 test "classify: std/builtin" {
@@ -450,25 +451,25 @@ test "processSource: preserves CRLF line endings" {
 test "walkDir: excludes cache and vcs directories" {
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
-    try tmp.dir.makePath(".git");
-    try tmp.dir.makePath(".zig-cache");
-    try tmp.dir.makePath("zig-cache");
-    try tmp.dir.makePath("zig-out");
-    try tmp.dir.makePath("sub");
-    try tmp.dir.makePath("sub/.zig-cache");
-    try tmp.dir.writeFile(.{ .sub_path = "main.zig", .data = "" });
-    try tmp.dir.writeFile(.{ .sub_path = "sub/lib.zig", .data = "" });
-    try tmp.dir.writeFile(.{ .sub_path = "sub/.zig-cache/e.zig", .data = "" });
-    try tmp.dir.writeFile(.{ .sub_path = ".git/a.zig", .data = "" });
-    try tmp.dir.writeFile(.{ .sub_path = ".zig-cache/b.zig", .data = "" });
-    try tmp.dir.writeFile(.{ .sub_path = "zig-cache/c.zig", .data = "" });
-    try tmp.dir.writeFile(.{ .sub_path = "zig-out/d.zig", .data = "" });
+    try compat.makePath(compat.testIo(), tmp.dir, ".git");
+    try compat.makePath(compat.testIo(), tmp.dir, ".zig-cache");
+    try compat.makePath(compat.testIo(), tmp.dir, "zig-cache");
+    try compat.makePath(compat.testIo(), tmp.dir, "zig-out");
+    try compat.makePath(compat.testIo(), tmp.dir, "sub");
+    try compat.makePath(compat.testIo(), tmp.dir, "sub/.zig-cache");
+    try compat.writeFile(compat.testIo(), tmp.dir, "main.zig", "");
+    try compat.writeFile(compat.testIo(), tmp.dir, "sub/lib.zig", "");
+    try compat.writeFile(compat.testIo(), tmp.dir, "sub/.zig-cache/e.zig", "");
+    try compat.writeFile(compat.testIo(), tmp.dir, ".git/a.zig", "");
+    try compat.writeFile(compat.testIo(), tmp.dir, ".zig-cache/b.zig", "");
+    try compat.writeFile(compat.testIo(), tmp.dir, "zig-cache/c.zig", "");
+    try compat.writeFile(compat.testIo(), tmp.dir, "zig-out/d.zig", "");
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     defer {
         for (found.items) |f| std.testing.allocator.free(f);
         found.deinit(std.testing.allocator);
     }
-    try zsort.walkDir(std.testing.allocator, tmp.dir, "tmp", &found, &.{});
+    try zsort.walkDir(compat.testIo(), std.testing.allocator, tmp.dir, "tmp", &found, &.{});
     try std.testing.expectEqual(@as(usize, 2), found.items.len);
     for (found.items) |f| {
         try std.testing.expect(std.mem.endsWith(u8, f, "main.zig") or std.mem.endsWith(u8, f, "sub/lib.zig"));
@@ -478,18 +479,18 @@ test "walkDir: excludes cache and vcs directories" {
 test "walkDir: respects gitignore ignores at component boundaries" {
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
-    try tmp.dir.makePath("ignored");
-    try tmp.dir.makePath("build-tools");
-    try tmp.dir.makePath("keep");
-    try tmp.dir.writeFile(.{ .sub_path = "ignored/a.zig", .data = "" });
-    try tmp.dir.writeFile(.{ .sub_path = "build-tools/b.zig", .data = "" });
-    try tmp.dir.writeFile(.{ .sub_path = "keep/c.zig", .data = "" });
+    try compat.makePath(compat.testIo(), tmp.dir, "ignored");
+    try compat.makePath(compat.testIo(), tmp.dir, "build-tools");
+    try compat.makePath(compat.testIo(), tmp.dir, "keep");
+    try compat.writeFile(compat.testIo(), tmp.dir, "ignored/a.zig", "");
+    try compat.writeFile(compat.testIo(), tmp.dir, "build-tools/b.zig", "");
+    try compat.writeFile(compat.testIo(), tmp.dir, "keep/c.zig", "");
     var found: std.ArrayListUnmanaged([]const u8) = .empty;
     defer {
         for (found.items) |f| std.testing.allocator.free(f);
         found.deinit(std.testing.allocator);
     }
-    try zsort.walkDir(std.testing.allocator, tmp.dir, "tmp", &found, &.{ "ignored", "build" });
+    try zsort.walkDir(compat.testIo(), std.testing.allocator, tmp.dir, "tmp", &found, &.{ "ignored", "build" });
     try std.testing.expectEqual(@as(usize, 2), found.items.len);
     for (found.items) |f| {
         try std.testing.expect(std.mem.endsWith(u8, f, "build-tools/b.zig") or std.mem.endsWith(u8, f, "keep/c.zig"));
@@ -514,13 +515,8 @@ test "matchesIgnore: component-boundary prefix match" {
 test "loadGitignore: parses patterns, skips comments and unsupported entries" {
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{
-        .sub_path = ".gitignore",
-        .data = "# comment\n.zig-cache\nbuild/\n\n*.tmp\n!keep\nnode_modules\n  spaced  \n",
-    });
-    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
-    defer std.testing.allocator.free(root);
-    const ignores = try zsort.loadGitignore(std.testing.allocator, root);
+    try compat.writeFile(compat.testIo(), tmp.dir, ".gitignore", "# comment\n.zig-cache\nbuild/\n\n*.tmp\n!keep\nnode_modules\n  spaced  \n");
+    const ignores = try zsort.loadGitignore(compat.testIo(), std.testing.allocator, tmp.dir);
     defer {
         for (ignores) |p| std.testing.allocator.free(p);
         std.testing.allocator.free(ignores);
@@ -535,9 +531,7 @@ test "loadGitignore: parses patterns, skips comments and unsupported entries" {
 test "loadGitignore: missing file yields empty list" {
     var tmp = std.testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
-    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
-    defer std.testing.allocator.free(root);
-    const ignores = try zsort.loadGitignore(std.testing.allocator, root);
+    const ignores = try zsort.loadGitignore(compat.testIo(), std.testing.allocator, tmp.dir);
     defer std.testing.allocator.free(ignores);
     try std.testing.expectEqual(@as(usize, 0), ignores.len);
 }

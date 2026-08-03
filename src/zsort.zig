@@ -2,6 +2,8 @@
 
 const std = @import("std");
 
+const compat = @import("compat.zig");
+
 pub const version = "0.1.0";
 
 pub const class_std_builtin: u2 = 0;
@@ -94,7 +96,7 @@ fn findCommentStart(source: []const u8, line_start: usize) ?usize {
     while (true) {
         const prev_start = findLineStart(source, back);
         const prev_end = findLineEnd(source, prev_start);
-        const prev_trimmed = std.mem.trimLeft(u8, source[prev_start..prev_end], " \t\r");
+        const prev_trimmed = std.mem.trimStart(u8, source[prev_start..prev_end], " \t\r");
         if (prev_trimmed.len == 0 or std.mem.startsWith(u8, prev_trimmed, "//")) {
             comment_start = prev_start;
             if (prev_start == 0) return null;
@@ -153,14 +155,14 @@ pub fn extractPath(source: []const u8, needle: []const u8) ?[]const u8 {
 fn endsWithSemicolon(trimmed: []const u8) bool {
     var t = trimmed;
     if (std.mem.indexOf(u8, t, "//")) |c| t = t[0..c];
-    t = std.mem.trimRight(u8, t, " \t\r\n");
+    t = std.mem.trimEnd(u8, t, " \t\r\n");
     return t.len > 0 and t[t.len - 1] == ';';
 }
 
 // only the first token after = is a type keyword; trailing comment/string text must not count
 fn hasTypeKeyword(trimmed: []const u8, keyword: []const u8) bool {
     const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse return false;
-    const rhs = std.mem.trimLeft(u8, trimmed[eq + 1 ..], " \t");
+    const rhs = std.mem.trimStart(u8, trimmed[eq + 1 ..], " \t");
     if (!std.mem.startsWith(u8, rhs, keyword)) return false;
     const after = keyword.len;
     return after >= rhs.len or
@@ -168,7 +170,7 @@ fn hasTypeKeyword(trimmed: []const u8, keyword: []const u8) bool {
 }
 
 pub fn isTopLevelImportLine(line: []const u8) bool {
-    const trimmed = std.mem.trimLeft(u8, line, " \t\n\r");
+    const trimmed = std.mem.trimStart(u8, line, " \t\n\r");
     if (trimmed.len == 0) return true;
     if (std.mem.startsWith(u8, trimmed, "//")) return true;
 
@@ -238,7 +240,7 @@ pub fn collectImports(
             const found = i;
             const line_start = findLineStart(source, found);
             const line_end = findLineEnd(source, found);
-            const line = std.mem.trimLeft(u8, source[line_start..line_end], " \t\r");
+            const line = std.mem.trimStart(u8, source[line_start..line_end], " \t\r");
             if (!std.mem.startsWith(u8, line, "const ") and
                 !std.mem.startsWith(u8, line, "pub const ") and
                 !std.mem.startsWith(u8, line, "_ = @import"))
@@ -350,7 +352,7 @@ pub fn hasBannedPatterns(
             const found = i;
             const line_start = findLineStart(source, found);
             const line_end_excl = findLineEnd(source, found);
-            const line = std.mem.trimLeft(u8, source[line_start..line_end_excl], " \t\r");
+            const line = std.mem.trimStart(u8, source[line_start..line_end_excl], " \t\r");
 
             if (!std.mem.startsWith(u8, line, "const ") and
                 !std.mem.startsWith(u8, line, "pub const ") and
@@ -411,7 +413,7 @@ pub fn buildSortedImportText(
     while (pos < block_end) {
         const le = findLineEnd(source, pos);
         const line = source[pos..le];
-        const trimmed = std.mem.trimLeft(u8, line, " \t\n\r");
+        const trimmed = std.mem.trimStart(u8, line, " \t\n\r");
         if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "//")) {
             if (!seen_content) {
                 try preamble_lines.append(allocator, line);
@@ -572,7 +574,7 @@ fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnma
     var lines: std.ArrayListUnmanaged([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |line| {
-        try lines.append(allocator, std.mem.trimRight(u8, line, "\r"));
+        try lines.append(allocator, std.mem.trimEnd(u8, line, "\r"));
     }
     // A trailing newline produces a final empty element; drop it so that
     // "a\n" and "a" compare equal.
@@ -613,13 +615,16 @@ pub fn formatUnifiedDiff(
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
+    errdefer buf = aw.toArrayList();
+    const w = &aw.writer;
 
     if (old_mid.len == 0 and new_mid.len == 0) {
         try w.print("  --- {s}\n", .{file_path});
         try w.print("  +++ {s}\n", .{file_path});
         try w.print("  (trailing newline only)\n", .{});
         try w.writeByte('\n');
+        buf = aw.toArrayList();
         return buf.toOwnedSlice(allocator);
     }
 
@@ -631,16 +636,13 @@ pub fn formatUnifiedDiff(
     for (new_mid) |line| try w.print("  + {s}\n", .{line});
     for (old_lines.items[after_start..after_end]) |line| try w.print("   {s}\n", .{line});
     try w.writeByte('\n');
+    buf = aw.toArrayList();
     return buf.toOwnedSlice(allocator);
 }
 
-fn showDiff(allocator: std.mem.Allocator, file_path: []const u8, old: []const u8, new: []const u8) void {
+fn showDiff(io: compat.Io, allocator: std.mem.Allocator, file_path: []const u8, old: []const u8, new: []const u8) void {
     const diff = formatUnifiedDiff(allocator, file_path, old, new) catch return;
-    var obuf: [4096]u8 = undefined;
-    const stdout_file = std.fs.File.stdout();
-    var stdout_w = stdout_file.writer(&obuf);
-    stdout_w.interface.writeAll(diff) catch return;
-    stdout_w.interface.flush() catch return;
+    compat.writeStdout(io, diff);
 }
 
 const excluded_dirs = [_][]const u8{ ".git", ".zig-cache", "zig-cache", "zig-out" };
@@ -660,7 +662,7 @@ fn isExcludedPath(path: []const u8) bool {
 /// but not `build-tools/x.zig`). A pattern containing a slash is anchored at the
 /// path root. A trailing slash in `pattern` is ignored.
 pub fn matchesIgnore(path: []const u8, pattern: []const u8) bool {
-    const pat = std.mem.trimRight(u8, pattern, "/");
+    const pat = std.mem.trimEnd(u8, pattern, "/");
     if (pat.len == 0) return false;
     if (std.mem.indexOfScalar(u8, pat, '/') != null) {
         return matchesComponentPrefix(path, pat);
@@ -684,15 +686,12 @@ fn matchesAnyIgnore(path: []const u8, ignores: []const []const u8) bool {
     return false;
 }
 
-/// Read `<root>/.gitignore` and return its cleaned patterns, allocated with
+/// Read `<dir>/.gitignore` and return its cleaned patterns, allocated with
 /// `allocator` (patterns and the slice belong to that allocator).
 /// Missing or unreadable files yield an empty list (not an error).
 /// ponytail: no wildcards or negation; entries match as path-component prefixes
-pub fn loadGitignore(allocator: std.mem.Allocator, root: []const u8) ![]const []const u8 {
-    const gitignore_path = try std.fs.path.join(allocator, &.{ root, ".gitignore" });
-    defer allocator.free(gitignore_path);
-
-    const contents = std.fs.cwd().readFileAlloc(allocator, gitignore_path, 1024 * 1024) catch return &[_][]const u8{};
+pub fn loadGitignore(io: compat.Io, allocator: std.mem.Allocator, dir: compat.Dir) ![]const []const u8 {
+    const contents = compat.readFileAlloc(io, dir, ".gitignore", allocator, 1024 * 1024) catch return &[_][]const u8{};
     defer allocator.free(contents);
 
     var patterns: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -709,33 +708,35 @@ pub fn loadGitignore(allocator: std.mem.Allocator, root: []const u8) ![]const []
 }
 
 pub fn walkDir(
+    io: compat.Io,
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: compat.Dir,
     base_path: []const u8,
     files: *std.ArrayListUnmanaged([]const u8),
     ignores: []const []const u8,
 ) !void {
     const Item = struct {
-        iter: std.fs.Dir.Iterator,
+        dir: compat.Dir,
+        iter: compat.Iterator,
         rel_len: usize,
     };
     var stack: std.ArrayListUnmanaged(Item) = .empty;
     var name_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer {
         if (stack.items.len > 1) {
-            for (stack.items[1..]) |*item| item.iter.dir.close();
+            for (stack.items[1..]) |*item| compat.close(io, &item.dir);
         }
         stack.deinit(allocator);
         name_buf.deinit(allocator);
     }
 
-    try stack.append(allocator, .{ .iter = dir.iterate(), .rel_len = 0 });
+    try stack.append(allocator, .{ .dir = dir, .iter = compat.iterate(dir), .rel_len = 0 });
 
     while (stack.items.len != 0) {
         const top = &stack.items[stack.items.len - 1];
-        const entry = try top.iter.next() orelse {
+        const entry = try compat.next(io, &top.iter) orelse {
             var item = stack.pop().?;
-            if (stack.items.len != 0) item.iter.dir.close();
+            if (stack.items.len != 0) compat.close(io, &item.dir);
             continue;
         };
         name_buf.shrinkRetainingCapacity(top.rel_len);
@@ -747,9 +748,9 @@ pub fn walkDir(
             .directory => {
                 if (isExcludedPath(rel)) continue;
                 if (matchesAnyIgnore(rel, ignores)) continue;
-                var sub = try top.iter.dir.openDir(entry.name, .{ .iterate = true });
-                errdefer sub.close();
-                try stack.append(allocator, .{ .iter = sub.iterateAssumeFirstIteration(), .rel_len = name_buf.items.len });
+                var sub = try compat.openDir(io, top.dir, entry.name, .{ .iterate = true });
+                errdefer compat.close(io, &sub);
+                try stack.append(allocator, .{ .dir = sub, .iter = compat.iterate(sub), .rel_len = name_buf.items.len });
             },
             .file => {
                 if (isExcludedPath(rel)) continue;
@@ -767,7 +768,7 @@ fn hasSkipComment(source: []const u8) bool {
     var pos: usize = 0;
     while (pos < source.len) {
         const le = findLineEnd(source, pos);
-        const trimmed = std.mem.trimLeft(u8, source[pos..le], " \t\r");
+        const trimmed = std.mem.trimStart(u8, source[pos..le], " \t\r");
         if (std.mem.startsWith(u8, trimmed, "//") and std.mem.indexOf(u8, trimmed, "zsort: skip") != null) {
             return true;
         }
@@ -953,17 +954,6 @@ pub fn parseArgs(
     };
 }
 
-fn printStdout(comptime fmt: []const u8, args: anytype) void {
-    var obuf: [4096]u8 = undefined;
-    var w = std.fs.File.stdout().writer(&obuf);
-    w.interface.print(fmt, args) catch return;
-    w.interface.flush() catch return;
-}
-
-fn useColor() bool {
-    return std.posix.isatty(std.fs.File.stdout().handle);
-}
-
 pub const SummaryStats = struct {
     changed: usize,
     errors: usize,
@@ -993,8 +983,8 @@ pub fn formatSummary(
     };
 }
 
-fn printHelp() void {
-    printStdout(
+fn printHelp(io: compat.Io) void {
+    compat.printStdout(io,
         \\Usage: zsort [check|fix] <dir|file> [options]
         \\
         \\Modes:
@@ -1023,9 +1013,9 @@ const FileJob = struct {
     banned: []const []const u8,
 };
 
-fn processFileJob(job: *const FileJob) void {
+fn processFileJob(job: *const FileJob, io: compat.Io) void {
     const allocator = job.slot.arena.allocator();
-    const source = std.fs.cwd().readFileAlloc(allocator, job.path, 10 * 1024 * 1024) catch |err| {
+    const source = compat.readFileAlloc(io, compat.cwd(), job.path, allocator, 10 * 1024 * 1024) catch |err| {
         job.slot.read_err = @errorName(err);
         return;
     };
@@ -1036,12 +1026,9 @@ fn processFileJob(job: *const FileJob) void {
     };
 }
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+pub const main = compat.entry(runMain).main;
 
-    const args = try std.process.argsAlloc(allocator);
+fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io) !void {
     var err_msg: ?[]const u8 = null;
     var parsed = parseArgs(allocator, args, &err_msg) catch |e| switch (e) {
         error.Usage => {
@@ -1066,27 +1053,27 @@ pub fn main() !void {
     defer parsed.deinit(allocator);
 
     if (parsed.help) {
-        printHelp();
+        printHelp(io);
         return;
     }
     if (parsed.version) {
-        printStdout("zsort {s}\n", .{version});
+        compat.printStdout(io, "zsort {s}\n", .{version});
         return;
     }
 
     var files: std.ArrayListUnmanaged([]const u8) = .empty;
     defer files.deinit(allocator);
 
-    const stat = std.fs.cwd().statFile(parsed.target) catch |err| {
+    const stat = compat.statFile(io, compat.cwd(), parsed.target) catch |err| {
         std.debug.print("Cannot access '{s}': {s}\n", .{ parsed.target, @errorName(err) });
         std.process.exit(1);
     };
 
     if (stat.kind == .directory) {
-        var dir = try std.fs.cwd().openDir(parsed.target, .{ .iterate = true });
-        defer dir.close();
-        const ignores = try loadGitignore(allocator, parsed.target);
-        try walkDir(allocator, dir, parsed.target, &files, ignores);
+        var dir = try compat.openDir(io, compat.cwd(), parsed.target, .{ .iterate = true });
+        defer compat.close(io, &dir);
+        const ignores = try loadGitignore(io, allocator, dir);
+        try walkDir(io, allocator, dir, parsed.target, &files, ignores);
     } else if (stat.kind == .file) {
         try files.append(allocator, parsed.target);
     } else {
@@ -1099,7 +1086,7 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    var timer = try std.time.Timer.start();
+    var timer = try compat.Timer.start(io);
 
     const slots = try allocator.alloc(JobSlot, files.items.len);
     defer allocator.free(slots);
@@ -1124,15 +1111,7 @@ pub fn main() !void {
         };
     }
 
-    // SAFETY: init() fully initializes the pool before any use below.
-    var pool: std.Thread.Pool = undefined;
-    try std.Thread.Pool.init(&pool, .{ .allocator = allocator, .n_jobs = null });
-    defer pool.deinit();
-    var wg: std.Thread.WaitGroup = .{};
-    for (jobs) |*job| {
-        pool.spawnWg(&wg, processFileJob, .{job});
-    }
-    pool.waitAndWork(&wg);
+    try compat.runParallel(io, allocator, FileJob, processFileJob, jobs);
 
     var changed_count: usize = 0;
     var fixed_count: usize = 0;
@@ -1166,31 +1145,19 @@ pub fn main() !void {
 
         if (parsed.mode == .fix) {
             fixFile: {
-                var af_buf: [4096]u8 = undefined;
-                var af = std.fs.cwd().atomicFile(file_path, .{ .write_buffer = &af_buf }) catch |err| {
-                    std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
-                    error_count += 1;
-                    break :fixFile;
-                };
-                defer af.deinit();
-                af.file_writer.interface.writeAll(result.new_text) catch |err| {
-                    std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
-                    error_count += 1;
-                    break :fixFile;
-                };
-                af.finish() catch |err| {
+                compat.atomicWrite(io, compat.cwd(), file_path, result.new_text) catch |err| {
                     std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
                     error_count += 1;
                     break :fixFile;
                 };
                 fixed_count += 1;
-                printStdout("Fixed: {s}\n", .{file_path});
+                compat.printStdout(io, "Fixed: {s}\n", .{file_path});
             }
         } else {
             if (result.stray_count > 0) {
-                showDiff(allocator, file_path, slot.source, result.new_text);
+                showDiff(io, allocator, file_path, slot.source, result.new_text);
             } else {
-                showDiff(allocator, file_path, slot.source[0..result.block_end], result.new_block);
+                showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block);
             }
         }
     }
@@ -1203,15 +1170,15 @@ pub fn main() !void {
         .elapsed_ns = timer.read(),
     };
     if (parsed.mode == .check) {
-        if (formatSummary(allocator, stats, .check, useColor())) |summary| {
-            printStdout("{s}", .{summary});
+        if (formatSummary(allocator, stats, .check, compat.isTty(io))) |summary| {
+            compat.printStdout(io, "{s}", .{summary});
         }
         if (changed_count > 0 or error_count > 0 or banned_count > 0) {
             std.process.exit(1);
         }
     } else {
-        if (formatSummary(allocator, stats, .fix, useColor())) |summary| {
-            printStdout("{s}", .{summary});
+        if (formatSummary(allocator, stats, .fix, compat.isTty(io))) |summary| {
+            compat.printStdout(io, "{s}", .{summary});
         }
         if (error_count > 0 or banned_count > 0) std.process.exit(1);
     }
