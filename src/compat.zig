@@ -23,6 +23,13 @@ pub fn readFileAlloc(io: Io, dir: Dir, path: []const u8, allocator: std.mem.Allo
     return dir.readFileAlloc(allocator, path, max);
 }
 
+/// Sentinel-terminated read for `std.zig.Ast.parse`, which requires
+/// `[:0]const u8`. Both 0.15 and 0.16 accept a sentinel in the options form.
+pub fn readFileAllocZ(io: Io, dir: Dir, path: []const u8, allocator: std.mem.Allocator, max: usize) ![:0]u8 {
+    if (is_v016) return std.Io.Dir.readFileAllocOptions(dir, io, path, allocator, .limited(max), .of(u8), 0);
+    return dir.readFileAllocOptions(allocator, path, max, null, .of(u8), 0);
+}
+
 pub fn statFile(io: Io, dir: Dir, path: []const u8) !Stat {
     if (is_v016) return std.Io.Dir.statFile(dir, io, path, .{});
     return dir.statFile(path);

@@ -125,6 +125,7 @@ moved as a whole.
 ### What `fix` does
 
 - Sorts and groups top-of-file imports
+- Organizes typed imports (`const x: SomeType = @import(...)`) like plain ones
 - Hoists imports that appear later in the file into their proper group
 - Keeps comments that immediately precede an import attached to it
 - Preserves `//!` module documentation and the file's line endings (CRLF kept)
