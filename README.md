@@ -26,8 +26,8 @@ Zig. No cask or prebuilt bottles involved.
 
 ### As a Zig package
 
-Add zsort to your `build.zig.zon` (run `zig fetch --save` to fill in the
-hash):
+Add zsort to your `build.zig.zon` (run `zig fetch --save` to fill in a hash
+like the one below for the version you pin):
 
 ```zig
 .{
@@ -37,7 +37,7 @@ hash):
     .dependencies = .{
         .zsort = .{
             .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.1.0.tar.gz",
-            .hash = "...",
+            .hash = "zsort-0.1.0-D-hm6cRzAQBLca9mEL98ShoTMXxwh_3M_mv_4n6uDpYM",
             .lazy = true,
         },
     },
