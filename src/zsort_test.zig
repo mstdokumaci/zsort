@@ -123,27 +123,27 @@ test "hasBannedPatterns: no problems" {
         \\const std = @import("std");
         \\const foo = @import("foo");
     ;
-    try std.testing.expectEqual(@as(?[]const u8, null), zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }));
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }));
 }
 
 test "hasBannedPatterns: ./ prefix detected" {
     const source = "const foo = @import(\"./bar\");\n";
-    const msg = zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }) orelse return error.TestFailed;
+    const msg = try zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }) orelse return error.TestFailed;
     defer std.testing.allocator.free(msg);
     try std.testing.expect(std.mem.indexOf(u8, msg, "./") != null);
 }
 
 test "hasBannedPatterns: ./ prefix ignored when not listed" {
     const source = "const foo = @import(\"./bar\");\n";
-    try std.testing.expectEqual(@as(?[]const u8, null), zsort.hasBannedPatterns(std.testing.allocator, source, &.{"src/"}));
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, source, &.{"src/"}));
 }
 
 test "hasBannedPatterns: src/ prefix detected only when listed" {
     const src_source = "const foo = @import(\"src/bar.zig\");\n";
-    const msg = zsort.hasBannedPatterns(std.testing.allocator, src_source, &.{ "./", "src/" }) orelse return error.TestFailed;
+    const msg = try zsort.hasBannedPatterns(std.testing.allocator, src_source, &.{ "./", "src/" }) orelse return error.TestFailed;
     defer std.testing.allocator.free(msg);
     try std.testing.expect(std.mem.indexOf(u8, msg, "src/") != null);
-    try std.testing.expectEqual(@as(?[]const u8, null), zsort.hasBannedPatterns(std.testing.allocator, src_source, &.{"./"}));
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, src_source, &.{"./"}));
 }
 
 test "hasBannedPatterns: multiple prefixes, unmatched prefix no flag" {
@@ -151,7 +151,7 @@ test "hasBannedPatterns: multiple prefixes, unmatched prefix no flag" {
         \\const std = @import("std");
         \\const foo = @import("bar.zig");
     ;
-    try std.testing.expectEqual(@as(?[]const u8, null), zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "lib/", "app/" }));
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "lib/", "app/" }));
 }
 
 test "hasBannedPatterns: commented-out @import ignored" {
@@ -159,12 +159,12 @@ test "hasBannedPatterns: commented-out @import ignored" {
         \\ // const foo = @import("bar");
         \\const std = @import("std");
     ;
-    try std.testing.expectEqual(@as(?[]const u8, null), zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }));
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }));
 }
 
 test "hasBannedPatterns: inline @import detected even without prefixes" {
     const source = "fn foo() @import(\"bar\").Type {\n}\n";
-    const msg = zsort.hasBannedPatterns(std.testing.allocator, source, &.{}) orelse return error.TestFailed;
+    const msg = try zsort.hasBannedPatterns(std.testing.allocator, source, &.{}) orelse return error.TestFailed;
     defer std.testing.allocator.free(msg);
 }
 
@@ -243,13 +243,13 @@ fn collectImportsForTest(source: []const u8, block_end: usize) !std.ArrayListUnm
 }
 
 test "hasBannedPatterns: self-scan clean" {
-    try std.testing.expectEqual(@as(?[]const u8, null), zsort.hasBannedPatterns(std.testing.allocator, @embedFile("zsort.zig"), &.{ "./", "src/" }));
-    try std.testing.expectEqual(@as(?[]const u8, null), zsort.hasBannedPatterns(std.testing.allocator, @embedFile("zsort_test.zig"), &.{ "./", "src/" }));
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, @embedFile("zsort.zig"), &.{ "./", "src/" }));
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, @embedFile("zsort_test.zig"), &.{ "./", "src/" }));
 }
 
 test "hasBannedPatterns: backslash-prefixed lines ignored" {
     const source = "\\\\const x = @import(\"a\");\nconst std = @import(\"std\");\n";
-    try std.testing.expectEqual(@as(?[]const u8, null), zsort.hasBannedPatterns(std.testing.allocator, source, &.{}));
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, source, &.{}));
 }
 
 test "collectImports: braces in multiline-string line don't affect depth" {
@@ -374,7 +374,7 @@ test "processSource: import expression ending in brace terminates" {
 
 test "hasBannedPatterns: whitespace after @import( still detected" {
     const source = "const foo = @import( \"./bar\");\n";
-    const msg = zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }) orelse return error.TestFailed;
+    const msg = try zsort.hasBannedPatterns(std.testing.allocator, source, &.{ "./", "src/" }) orelse return error.TestFailed;
     defer std.testing.allocator.free(msg);
     try std.testing.expect(std.mem.indexOf(u8, msg, "./") != null);
 }
@@ -505,6 +505,10 @@ test "matchesIgnore: component-boundary prefix match" {
     try std.testing.expect(!zsort.matchesIgnore("buildings.zig", "build"));
     try std.testing.expect(!zsort.matchesIgnore("x", "y"));
     try std.testing.expect(!zsort.matchesIgnore("x", "/"));
+    try std.testing.expect(zsort.matchesIgnore("a\\build\\b.zig", "build"));
+    try std.testing.expect(!zsort.matchesIgnore("a\\build-tools\\x.zig", "build"));
+    try std.testing.expect(zsort.matchesIgnore("build\\foo.zig", "build"));
+    try std.testing.expect(zsort.matchesIgnore("a\\build\\b.zig", "build/"));
 }
 
 test "loadGitignore: parses patterns, skips comments and unsupported entries" {

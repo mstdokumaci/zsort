@@ -87,6 +87,25 @@ fn findLineEnd(source: []const u8, pos: usize) usize {
     return source.len;
 }
 
+fn findCommentStart(source: []const u8, line_start: usize) ?usize {
+    if (line_start == 0) return null;
+    var comment_start: ?usize = null;
+    var back = line_start - 1;
+    while (true) {
+        const prev_start = findLineStart(source, back);
+        const prev_end = findLineEnd(source, prev_start);
+        const prev_trimmed = std.mem.trimLeft(u8, source[prev_start..prev_end], " \t\r");
+        if (prev_trimmed.len == 0 or std.mem.startsWith(u8, prev_trimmed, "//")) {
+            comment_start = prev_start;
+            if (prev_start == 0) return null;
+            back = prev_start - 1;
+        } else {
+            break;
+        }
+    }
+    return comment_start;
+}
+
 pub fn findCImportEnd(source: []const u8, pos: usize) usize {
     var i = pos;
     var depth: usize = 0;
@@ -231,25 +250,7 @@ pub fn collectImports(
                 i = line_end;
                 continue;
             };
-            var comment_start: ?usize = null;
-            if (line_start > 0) {
-                var back = line_start - 1;
-                while (true) {
-                    const prev_start = findLineStart(source, back);
-                    const prev_end = findLineEnd(source, prev_start);
-                    const prev_trimmed = std.mem.trimLeft(u8, source[prev_start..prev_end], " \t\r");
-                    if (prev_trimmed.len == 0 or std.mem.startsWith(u8, prev_trimmed, "//")) {
-                        comment_start = prev_start;
-                        if (prev_start == 0) {
-                            comment_start = null;
-                            break;
-                        }
-                        back = prev_start - 1;
-                    } else {
-                        break;
-                    }
-                }
-            }
+            const comment_start = findCommentStart(source, line_start);
             var import_end = line_end;
             if (!endsWithSemicolon(line)) {
                 var j = line_end;
@@ -291,25 +292,7 @@ pub fn collectImports(
             const found = i;
             const line_start = findLineStart(source, found);
             const block_end_cimport = findCImportEnd(source, found);
-            var comment_start: ?usize = null;
-            if (line_start > 0) {
-                var back = line_start - 1;
-                while (true) {
-                    const prev_start = findLineStart(source, back);
-                    const prev_end = findLineEnd(source, prev_start);
-                    const prev_trimmed = std.mem.trimLeft(u8, source[prev_start..prev_end], " \t\r");
-                    if (prev_trimmed.len == 0 or std.mem.startsWith(u8, prev_trimmed, "//")) {
-                        comment_start = prev_start;
-                        if (prev_start == 0) {
-                            comment_start = null;
-                            break;
-                        }
-                        back = prev_start - 1;
-                    } else {
-                        break;
-                    }
-                }
-            }
+            const comment_start = findCommentStart(source, line_start);
             try imports.append(allocator, .{
                 .start = line_start,
                 .end = block_end_cimport,
@@ -355,7 +338,7 @@ pub fn hasBannedPatterns(
     allocator: std.mem.Allocator,
     source: []const u8,
     banned_prefixes: []const []const u8,
-) ?[]const u8 {
+) !?[]const u8 {
     var i: usize = 0;
     while (i < source.len) {
         const skip = skipStringOrComment(source, i);
@@ -373,13 +356,13 @@ pub fn hasBannedPatterns(
                 !std.mem.startsWith(u8, line, "pub const ") and
                 !std.mem.startsWith(u8, line, "_ = @import"))
             {
-                return allocFmt(allocator, "inline @import in type expression", .{});
+                return allocFmt(allocator, "inline @import in type expression", .{}) orelse return error.OutOfMemory;
             }
 
             if (extractPath(source[found..], "@import(")) |path| {
                 for (banned_prefixes) |prefix| {
                     if (std.mem.startsWith(u8, path, prefix)) {
-                        return allocFmt(allocator, "import path starts with banned prefix '{s}'", .{prefix});
+                        return allocFmt(allocator, "import path starts with banned prefix '{s}'", .{prefix}) orelse return error.OutOfMemory;
                     }
                 }
             }
@@ -683,7 +666,7 @@ pub fn matchesIgnore(path: []const u8, pattern: []const u8) bool {
     if (std.mem.indexOfScalar(u8, pat, '/') != null) {
         return matchesComponentPrefix(path, pat);
     }
-    var it = std.mem.tokenizeScalar(u8, path, '/');
+    var it = std.mem.tokenizeAny(u8, path, "/\\");
     while (it.next()) |component| {
         if (matchesComponentPrefix(component, pat)) return true;
     }
@@ -692,7 +675,7 @@ pub fn matchesIgnore(path: []const u8, pattern: []const u8) bool {
 
 fn matchesComponentPrefix(s: []const u8, pat: []const u8) bool {
     if (!std.mem.startsWith(u8, s, pat)) return false;
-    return s.len == pat.len or s[pat.len] == '/';
+    return s.len == pat.len or s[pat.len] == '/' or s[pat.len] == '\\';
 }
 
 fn matchesAnyIgnore(path: []const u8, ignores: []const []const u8) bool {
@@ -789,7 +772,8 @@ pub fn processSource(
     var imports = try collectImports(allocator, source, block_end);
     defer imports.deinit(allocator);
 
-    const banned_msg = hasBannedPatterns(allocator, source, banned_prefixes);
+    const banned_msg = try hasBannedPatterns(allocator, source, banned_prefixes);
+    errdefer if (banned_msg) |msg| allocator.free(msg);
 
     if (imports.items.len == 0) {
         return .{
@@ -813,6 +797,7 @@ pub fn processSource(
 
     var rest = source[block_end..];
     var rest_owned: ?[]const u8 = null;
+    errdefer if (rest_owned) |owned| allocator.free(owned);
     if (stray_imports.items.len > 0) {
         std.sort.pdq(Import, stray_imports.items, {}, struct {
             fn lt(_: void, a: Import, b: Import) bool {

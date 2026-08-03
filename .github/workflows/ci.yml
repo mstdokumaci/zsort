@@ -19,6 +19,8 @@ jobs:
       ZLINT_VERSION: v0.9.1
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
@@ -39,12 +41,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13]
+        os: [ubuntu-latest, macos-latest, macos-15-intel]
         zig: [0.15.2, 0.16.0]
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.zig == '0.16.0' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ matrix.zig }}

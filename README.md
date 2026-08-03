@@ -20,7 +20,7 @@ The binary is written to `zig-out/bin/zsort`.
 
 ## Usage
 
-```
+```text
 Usage: zsort [check|fix] <dir|file> [options]
 
 Modes:
