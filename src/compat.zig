@@ -150,6 +150,7 @@ pub fn runParallel(io: Io, allocator: std.mem.Allocator, comptime Job: type, com
         for (jobs) |*job| g.async(io, function, .{ job, io });
         try g.await(io);
     } else {
+        // SAFETY: `pool` is only written by init() below, never read before it.
         var pool: std.Thread.Pool = undefined;
         try std.Thread.Pool.init(&pool, .{ .allocator = allocator, .n_jobs = null });
         defer pool.deinit();
