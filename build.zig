@@ -67,17 +67,18 @@ pub fn build(b: *std.Build) void {
         const lint_step = b.step("lint", "Run zsort check-imports on the repo");
         lint_step.dependOn(&check_imports.step);
     } else {
-        const zwanzig = b.dependency("zwanzig", .{
+        if (b.lazyDependency("zwanzig", .{
             .target = b.graph.host,
             .optimize = .ReleaseFast,
-        });
-        const run_zwanzig = b.addRunArtifact(zwanzig.artifact("zwanzig"));
-        run_zwanzig.setCwd(b.path("."));
+        })) |zwanzig| {
+            const run_zwanzig = b.addRunArtifact(zwanzig.artifact("zwanzig"));
+            run_zwanzig.setCwd(b.path("."));
 
-        run_zwanzig.addArgs(&.{ "src", "build.zig" });
-        const lint_step = b.step("lint", "Run Zwanzig on the whole repo");
-        lint_step.dependOn(&run_zwanzig.step);
-        lint_step.dependOn(&check_imports.step);
+            run_zwanzig.addArgs(&.{ "src", "build.zig" });
+            const lint_step = b.step("lint", "Run Zwanzig on the whole repo");
+            lint_step.dependOn(&run_zwanzig.step);
+            lint_step.dependOn(&check_imports.step);
+        }
     }
 
     // `zig build check` is not built-in on 0.15.2; define a compile-only step
