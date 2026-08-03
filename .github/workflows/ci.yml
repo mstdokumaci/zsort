@@ -28,11 +28,13 @@ jobs:
       - name: Install zlint (pinned)
         run: |
           curl -fsSL -o /tmp/zlint "https://github.com/DonIsaac/zlint/releases/download/${ZLINT_VERSION}/zlint-linux-x86_64"
+          echo "3290bd511d37e4f6ccca3621b9894cd6c378195cdaac27520d0bd894058b2b9b  /tmp/zlint" | sha256sum --check -
           chmod +x /tmp/zlint
           sudo mv /tmp/zlint /usr/local/bin/zlint
       - name: Install zwanzig (pinned)
         run: |
           curl -fsSL -o /tmp/zwanzig.tar.gz "https://github.com/forketyfork/zwanzig/releases/download/${ZWANZIG_VERSION}/zwanzig-${ZWANZIG_VERSION}-linux-x86_64.tar.gz"
+          echo "4667f5f0635b27362a4c9340aa971318f71e5aee778bd5302e88c008e5ce368d  /tmp/zwanzig.tar.gz" | sha256sum --check -
           mkdir -p /tmp/zwanzig
           tar -xzf /tmp/zwanzig.tar.gz -C /tmp/zwanzig
           sudo mv /tmp/zwanzig/zwanzig /usr/local/bin/zwanzig
