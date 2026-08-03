@@ -651,6 +651,7 @@ fn showDiff(io: compat.Io, allocator: std.mem.Allocator, file_path: []const u8, 
         const stdout_file = std.fs.File.stdout();
         var stdout_w = stdout_file.writer(&obuf);
         stdout_w.interface.writeAll(diff) catch return;
+        stdout_w.interface.flush() catch return;
     }
 }
 
