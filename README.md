@@ -18,7 +18,7 @@ There are two ways to get `zsort`.
 
 ```sh
 brew tap mstdokumaci/zsort
-brew install zsort
+brew install mstdokumaci/zsort/zsort
 ```
 
 This installs a `zsort` binary built from source with the Homebrew-provided
