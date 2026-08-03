@@ -1,0 +1,60 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      ZLINT_VERSION: v0.9.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Install zlint (pinned)
+        run: |
+          curl -fsSL -o /tmp/zlint "https://github.com/DonIsaac/zlint/releases/download/${ZLINT_VERSION}/zlint-linux-x86_64"
+          chmod +x /tmp/zlint
+          sudo mv /tmp/zlint /usr/local/bin/zlint
+      - name: Lint chain
+        run: |
+          zig build check-imports
+          zig fmt --check src
+          zlint --deny-warnings
+          zig build lint
+          zig build check --summary all
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, zig: 0.15.2 }
+          - { os: ubuntu-latest, zig: 0.16.0 }
+          - { os: macos-15, zig: 0.15.2 }
+          - { os: macos-latest, zig: 0.16.0 }
+          - { os: macos-15-intel, zig: 0.15.2 }
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.zig == '0.16.0' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ matrix.zig }}
+      - run: zig build test --summary all
+      - run: zig build check --summary all
