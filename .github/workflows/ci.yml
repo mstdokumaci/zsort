@@ -41,8 +41,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel]
-        zig: [0.15.2, 0.16.0]
+        include:
+          - { os: ubuntu-latest, zig: 0.15.2 }
+          - { os: ubuntu-latest, zig: 0.16.0 }
+          - { os: macos-15, zig: 0.15.2 }
+          - { os: macos-latest, zig: 0.16.0 }
+          - { os: macos-15-intel, zig: 0.15.2 }
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.zig == '0.16.0' }}
     steps:

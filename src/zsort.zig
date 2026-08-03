@@ -530,7 +530,7 @@ pub fn buildSortedImportText(
     }
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer buf.deinit(allocator);
+    defer buf.deinit(allocator);
 
     for (preamble_lines.items) |line| {
         try buf.appendSlice(allocator, line);
@@ -564,7 +564,6 @@ pub fn buildSortedImportText(
         if (blank_run < 2) try deduped.appendSlice(allocator, line);
         line_pos = le;
     }
-    buf.deinit(allocator);
 
     return deduped.toOwnedSlice(allocator);
 }
@@ -716,15 +715,51 @@ pub fn walkDir(
     files: *std.ArrayListUnmanaged([]const u8),
     ignores: []const []const u8,
 ) !void {
-    var iter = try dir.walk(allocator);
-    defer iter.deinit();
-    while (try iter.next()) |entry| {
-        if (entry.kind != .file) continue;
-        if (isExcludedPath(entry.path)) continue;
-        if (matchesAnyIgnore(entry.path, ignores)) continue;
-        if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
-        const full_path = try std.fs.path.join(allocator, &.{ base_path, entry.path });
-        try files.append(allocator, full_path);
+    const Item = struct {
+        iter: std.fs.Dir.Iterator,
+        rel_len: usize,
+    };
+    var stack: std.ArrayListUnmanaged(Item) = .empty;
+    var name_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer {
+        if (stack.items.len > 1) {
+            for (stack.items[1..]) |*item| item.iter.dir.close();
+        }
+        stack.deinit(allocator);
+        name_buf.deinit(allocator);
+    }
+
+    try stack.append(allocator, .{ .iter = dir.iterate(), .rel_len = 0 });
+
+    while (stack.items.len != 0) {
+        const top = &stack.items[stack.items.len - 1];
+        const entry = try top.iter.next() orelse {
+            var item = stack.pop().?;
+            if (stack.items.len != 0) item.iter.dir.close();
+            continue;
+        };
+        name_buf.shrinkRetainingCapacity(top.rel_len);
+        if (name_buf.items.len != 0) try name_buf.append(allocator, std.fs.path.sep);
+        try name_buf.appendSlice(allocator, entry.name);
+        const rel = name_buf.items;
+
+        switch (entry.kind) {
+            .directory => {
+                if (isExcludedPath(rel)) continue;
+                if (matchesAnyIgnore(rel, ignores)) continue;
+                var sub = try top.iter.dir.openDir(entry.name, .{ .iterate = true });
+                errdefer sub.close();
+                try stack.append(allocator, .{ .iter = sub.iterateAssumeFirstIteration(), .rel_len = name_buf.items.len });
+            },
+            .file => {
+                if (isExcludedPath(rel)) continue;
+                if (matchesAnyIgnore(rel, ignores)) continue;
+                if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+                const full_path = try std.fs.path.join(allocator, &.{ base_path, rel });
+                try files.append(allocator, full_path);
+            },
+            else => {},
+        }
     }
 }
 
@@ -821,6 +856,7 @@ pub fn processSource(
     }
 
     const new_imports = try buildSortedImportText(allocator, source, imports.items, block_end);
+    errdefer allocator.free(new_imports);
 
     const original_block = source[0..block_end];
     const changed = !std.mem.eql(u8, original_block, new_imports) or stray_imports.items.len > 0;
