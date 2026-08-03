@@ -615,15 +615,16 @@ pub fn formatUnifiedDiff(
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
-    var w = compat.ListWriter.init(allocator, &buf);
-    errdefer buf = w.toArrayList();
+    var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
+    errdefer buf = aw.toArrayList();
+    const w = &aw.writer;
 
     if (old_mid.len == 0 and new_mid.len == 0) {
         try w.print("  --- {s}\n", .{file_path});
         try w.print("  +++ {s}\n", .{file_path});
         try w.print("  (trailing newline only)\n", .{});
         try w.writeByte('\n');
-        buf = w.toArrayList();
+        buf = aw.toArrayList();
         return buf.toOwnedSlice(allocator);
     }
 
@@ -635,24 +636,13 @@ pub fn formatUnifiedDiff(
     for (new_mid) |line| try w.print("  + {s}\n", .{line});
     for (old_lines.items[after_start..after_end]) |line| try w.print("   {s}\n", .{line});
     try w.writeByte('\n');
-    buf = w.toArrayList();
+    buf = aw.toArrayList();
     return buf.toOwnedSlice(allocator);
 }
 
 fn showDiff(io: compat.Io, allocator: std.mem.Allocator, file_path: []const u8, old: []const u8, new: []const u8) void {
     const diff = formatUnifiedDiff(allocator, file_path, old, new) catch return;
-    if (compat.is_v016) {
-        var obuf: [4096]u8 = undefined;
-        var stdout_w = std.Io.File.stdout().writer(io, &obuf);
-        stdout_w.interface.writeAll(diff) catch return;
-        stdout_w.flush() catch return;
-    } else {
-        var obuf: [4096]u8 = undefined;
-        const stdout_file = std.fs.File.stdout();
-        var stdout_w = stdout_file.writer(&obuf);
-        stdout_w.interface.writeAll(diff) catch return;
-        stdout_w.interface.flush() catch return;
-    }
+    compat.writeStdout(io, diff);
 }
 
 const excluded_dirs = [_][]const u8{ ".git", ".zig-cache", "zig-cache", "zig-out" };
@@ -964,27 +954,6 @@ pub fn parseArgs(
     };
 }
 
-fn printStdout(io: compat.Io, comptime fmt: []const u8, args: anytype) void {
-    if (compat.is_v016) {
-        var obuf: [4096]u8 = undefined;
-        var w = std.Io.File.stdout().writer(io, &obuf);
-        w.interface.print(fmt, args) catch return;
-        w.flush() catch return;
-    } else {
-        var obuf: [4096]u8 = undefined;
-        var w = std.fs.File.stdout().writer(&obuf);
-        w.interface.print(fmt, args) catch return;
-        w.interface.flush() catch return;
-    }
-}
-
-fn useColor(io: compat.Io) bool {
-    if (compat.is_v016) {
-        return std.Io.File.isTty(std.Io.File.stdout(), io) catch return false;
-    }
-    return std.posix.isatty(std.fs.File.stdout().handle);
-}
-
 pub const SummaryStats = struct {
     changed: usize,
     errors: usize,
@@ -1015,7 +984,7 @@ pub fn formatSummary(
 }
 
 fn printHelp(io: compat.Io) void {
-    printStdout(io,
+    compat.printStdout(io,
         \\Usage: zsort [check|fix] <dir|file> [options]
         \\
         \\Modes:
@@ -1057,36 +1026,7 @@ fn processFileJob(job: *const FileJob, io: compat.Io) void {
     };
 }
 
-fn mainV15() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const args = try std.process.argsAlloc(allocator);
-    const io: compat.Io = {};
-    try runMain(allocator, args, io);
-}
-
-fn mainV16(init: std.process.Init) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const args = try collectArgs(allocator, init.minimal.args);
-    try runMain(allocator, args, init.io);
-}
-
-pub const main = if (compat.is_v016) mainV16 else mainV15;
-
-/// Zig 0.16 has no `argsAlloc`; the args arrive via `Init` and must be
-/// collected into a slice.
-fn collectArgs(allocator: std.mem.Allocator, args: std.process.Args) ![]const []const u8 {
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
-    errdefer list.deinit(allocator);
-    var it = std.process.Args.Iterator.init(args);
-    while (it.next()) |arg| try list.append(allocator, try allocator.dupe(u8, arg));
-    return list.toOwnedSlice(allocator);
-}
+pub const main = compat.entry(runMain).main;
 
 fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io) !void {
     var err_msg: ?[]const u8 = null;
@@ -1117,7 +1057,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         return;
     }
     if (parsed.version) {
-        printStdout(io, "zsort {s}\n", .{version});
+        compat.printStdout(io, "zsort {s}\n", .{version});
         return;
     }
 
@@ -1171,19 +1111,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         };
     }
 
-    // SAFETY: init() fully initializes the pool before any use below.
-    if (compat.is_v016) {
-        var g: std.Io.Group = .init;
-        for (jobs) |*job| g.async(io, processFileJob, .{ job, io });
-        try g.await(io);
-    } else {
-        var pool: std.Thread.Pool = undefined;
-        try std.Thread.Pool.init(&pool, .{ .allocator = allocator, .n_jobs = null });
-        defer pool.deinit();
-        var wg: std.Thread.WaitGroup = .{};
-        for (jobs) |*job| pool.spawnWg(&wg, processFileJob, .{ job, {} });
-        pool.waitAndWork(&wg);
-    }
+    try compat.runParallel(io, allocator, FileJob, processFileJob, jobs);
 
     var changed_count: usize = 0;
     var fixed_count: usize = 0;
@@ -1223,7 +1151,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
                     break :fixFile;
                 };
                 fixed_count += 1;
-                printStdout(io, "Fixed: {s}\n", .{file_path});
+                compat.printStdout(io, "Fixed: {s}\n", .{file_path});
             }
         } else {
             if (result.stray_count > 0) {
@@ -1242,15 +1170,15 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         .elapsed_ns = timer.read(),
     };
     if (parsed.mode == .check) {
-        if (formatSummary(allocator, stats, .check, useColor(io))) |summary| {
-            printStdout(io, "{s}", .{summary});
+        if (formatSummary(allocator, stats, .check, compat.isTty(io))) |summary| {
+            compat.printStdout(io, "{s}", .{summary});
         }
         if (changed_count > 0 or error_count > 0 or banned_count > 0) {
             std.process.exit(1);
         }
     } else {
-        if (formatSummary(allocator, stats, .fix, useColor(io))) |summary| {
-            printStdout(io, "{s}", .{summary});
+        if (formatSummary(allocator, stats, .fix, compat.isTty(io))) |summary| {
+            compat.printStdout(io, "{s}", .{summary});
         }
         if (error_count > 0 or banned_count > 0) std.process.exit(1);
     }

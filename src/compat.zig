@@ -76,49 +76,6 @@ pub fn writeFile(io: Io, dir: Dir, sub_path: []const u8, data: []const u8) !void
     return dir.writeFile(.{ .sub_path = sub_path, .data = data });
 }
 
-/// Writer over an `ArrayListUnmanaged(u8)`. 0.15 writes into the list in
-/// place; 0.16's `Io.Writer.Allocating` moves the list in and back out.
-pub const ListWriter = if (is_v016) struct {
-    inner: std.Io.Writer.Allocating,
-
-    pub fn init(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(u8)) ListWriter {
-        return .{ .inner = .fromArrayList(allocator, list) };
-    }
-
-    pub fn print(self: *ListWriter, comptime fmt: []const u8, args: anytype) !void {
-        try self.inner.writer.print(fmt, args);
-    }
-
-    pub fn writeByte(self: *ListWriter, byte: u8) !void {
-        try self.inner.writer.writeByte(byte);
-    }
-
-    pub fn toArrayList(self: *ListWriter) std.ArrayListUnmanaged(u8) {
-        return self.inner.toArrayList();
-    }
-} else struct {
-    list: *std.ArrayListUnmanaged(u8),
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(u8)) ListWriter {
-        return .{ .list = list, .allocator = allocator };
-    }
-
-    pub fn print(self: *ListWriter, comptime fmt: []const u8, args: anytype) !void {
-        var w = self.list.writer(self.allocator);
-        try w.print(fmt, args);
-    }
-
-    pub fn writeByte(self: *ListWriter, byte: u8) !void {
-        var w = self.list.writer(self.allocator);
-        try w.writeByte(byte);
-    }
-
-    pub fn toArrayList(self: *ListWriter) std.ArrayListUnmanaged(u8) {
-        return self.list.*;
-    }
-};
-
 pub const Timer = if (is_v016) struct {
     io: std.Io,
     started: std.Io.Timestamp,
@@ -148,4 +105,92 @@ pub const Timer = if (is_v016) struct {
 pub fn testIo() Io {
     if (is_v016) return std.testing.io;
     return {};
+}
+
+pub fn printStdout(io: Io, comptime fmt: []const u8, args: anytype) void {
+    if (is_v016) {
+        var obuf: [4096]u8 = undefined;
+        var w = std.Io.File.stdout().writer(io, &obuf);
+        w.interface.print(fmt, args) catch return;
+        w.flush() catch return;
+    } else {
+        var obuf: [4096]u8 = undefined;
+        var w = std.fs.File.stdout().writer(&obuf);
+        w.interface.print(fmt, args) catch return;
+        w.interface.flush() catch return;
+    }
+}
+
+pub fn writeStdout(io: Io, bytes: []const u8) void {
+    if (is_v016) {
+        var obuf: [4096]u8 = undefined;
+        var w = std.Io.File.stdout().writer(io, &obuf);
+        w.interface.writeAll(bytes) catch return;
+        w.flush() catch return;
+    } else {
+        var obuf: [4096]u8 = undefined;
+        var w = std.fs.File.stdout().writer(&obuf);
+        w.interface.writeAll(bytes) catch return;
+        w.interface.flush() catch return;
+    }
+}
+
+pub fn isTty(io: Io) bool {
+    if (is_v016) {
+        return std.Io.File.isTty(std.Io.File.stdout(), io) catch return false;
+    }
+    return std.posix.isatty(std.fs.File.stdout().handle);
+}
+
+/// Spawn `function` over `jobs` and wait for all of them. `function` must be
+/// `fn (*const Job, Io) void`; on 0.15 the `Io` argument is `void`.
+pub fn runParallel(io: Io, allocator: std.mem.Allocator, comptime Job: type, comptime function: anytype, jobs: []Job) !void {
+    if (is_v016) {
+        var g: std.Io.Group = .init;
+        for (jobs) |*job| g.async(io, function, .{ job, io });
+        try g.await(io);
+    } else {
+        var pool: std.Thread.Pool = undefined;
+        try std.Thread.Pool.init(&pool, .{ .allocator = allocator, .n_jobs = null });
+        defer pool.deinit();
+        var wg: std.Thread.WaitGroup = .{};
+        for (jobs) |*job| pool.spawnWg(&wg, function, .{ job, {} });
+        pool.waitAndWork(&wg);
+    }
+}
+
+/// Returns a type whose `main` has the correct signature for the active Zig
+/// version; it wires up the arena, command line args, and `Io` and then
+/// calls `run_main(allocator, args, io)`.
+pub fn entry(comptime run_main: anytype) type {
+    const run = run_main;
+    return struct {
+        fn mainV15() !void {
+            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
+            const allocator = arena.allocator();
+            const args = try std.process.argsAlloc(allocator);
+            try run(allocator, args, {});
+        }
+
+        fn mainV16(init: std.process.Init) !void {
+            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
+            const allocator = arena.allocator();
+            const args = try collectArgs(allocator, init.minimal.args);
+            try run(allocator, args, init.io);
+        }
+
+        pub const main = if (is_v016) mainV16 else mainV15;
+    };
+}
+
+/// Zig 0.16 has no `argsAlloc`; the args arrive via `Init` and must be
+/// collected into a slice. Only reachable on 0.16.
+fn collectArgs(allocator: std.mem.Allocator, args: std.process.Args) ![]const []const u8 {
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer list.deinit(allocator);
+    var it = std.process.Args.Iterator.init(args);
+    while (it.next()) |arg| try list.append(allocator, try allocator.dupe(u8, arg));
+    return list.toOwnedSlice(allocator);
 }
