@@ -14,36 +14,33 @@ pub const Import = ast_scan.Import;
 pub const classify = ast_scan.classify;
 pub const analyze = ast_scan.analyze;
 
-const findLineStart = ast_scan.findLineStart;
 const findLineEnd = ast_scan.findLineEnd;
-
-pub fn collectImports(
-    allocator: std.mem.Allocator,
-    source: [:0]const u8,
-    block_end: usize,
-) !std.ArrayListUnmanaged(Import) {
-    var analysis = try ast_scan.analyze(allocator, source);
-    defer analysis.deinit(allocator);
-    var result: std.ArrayListUnmanaged(Import) = .empty;
-    errdefer result.deinit(allocator);
-    try result.appendSlice(allocator, analysis.imports.items);
-    for (result.items) |*imp| imp.stray = imp.start >= block_end;
-    return result;
-}
-
-pub fn findImportBlockEnd(source: []const u8) usize {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const dup = arena.allocator().dupeZ(u8, source) catch return source.len;
-    const analysis = ast_scan.analyze(arena.allocator(), dup) catch return source.len;
-    return analysis.block_end;
-}
 
 fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ?[]const u8 {
     return std.fmt.allocPrint(allocator, fmt, args) catch |err| {
         std.debug.print("zsort: failed to format message: {s}\n", .{@errorName(err)});
         return null;
     };
+}
+
+fn scanBannedPatterns(
+    allocator: std.mem.Allocator,
+    analysis: *const ast_scan.Analysis,
+    banned_prefixes: []const []const u8,
+) !?[]const u8 {
+    for (analysis.calls.items) |call| {
+        if (std.mem.indexOfScalar(usize, analysis.allowed.items, call.offset) == null) {
+            return allocFmt(allocator, "inline @import in type expression", .{}) orelse return error.OutOfMemory;
+        }
+        if (call.path) |path| {
+            for (banned_prefixes) |prefix| {
+                if (std.mem.startsWith(u8, path, prefix)) {
+                    return allocFmt(allocator, "import path starts with banned prefix '{s}'", .{prefix}) orelse return error.OutOfMemory;
+                }
+            }
+        }
+    }
+    return null;
 }
 
 pub fn hasBannedPatterns(
@@ -53,32 +50,9 @@ pub fn hasBannedPatterns(
 ) !?[]const u8 {
     const dup = try allocator.dupeZ(u8, source);
     defer allocator.free(dup);
-    var tree = try std.zig.Ast.parse(allocator, dup, .zig);
-    defer tree.deinit(allocator);
-    var calls = try ast_scan.importCalls(allocator, tree);
-    defer calls.deinit(allocator);
-
-    for (calls.items) |call| {
-        const line_start = findLineStart(source, call.offset);
-        const line_end_excl = findLineEnd(source, call.offset);
-        const line = std.mem.trimStart(u8, source[line_start..line_end_excl], " \t\r");
-
-        if (!std.mem.startsWith(u8, line, "const ") and
-            !std.mem.startsWith(u8, line, "pub const "))
-        {
-            return allocFmt(allocator, "inline @import in type expression", .{}) orelse return error.OutOfMemory;
-        }
-
-        if (call.path) |path| {
-            for (banned_prefixes) |prefix| {
-                if (std.mem.startsWith(u8, path, prefix)) {
-                    return allocFmt(allocator, "import path starts with banned prefix '{s}'", .{prefix}) orelse return error.OutOfMemory;
-                }
-            }
-        }
-    }
-
-    return null;
+    var analysis = try ast_scan.analyze(allocator, dup);
+    defer analysis.deinit(allocator);
+    return scanBannedPatterns(allocator, &analysis, banned_prefixes);
 }
 
 fn detectNewline(source: []const u8) []const u8 {
@@ -145,7 +119,7 @@ pub fn buildSortedImportText(
     for (all_imports.items, 0..) |imp, idx| {
         if (idx == sorted_imports.len and sorted_imports.len > 0) {
             try imports_buf.appendSlice(allocator, nl);
-        } else if (prev_class != null and prev_class.? != imp.class) {
+        } else if (idx < sorted_imports.len and prev_class != null and prev_class.? != imp.class) {
             try imports_buf.appendSlice(allocator, nl);
         }
         prev_class = imp.class;
@@ -418,7 +392,7 @@ pub const ProcessResult = struct {
 
 pub fn processSource(
     allocator: std.mem.Allocator,
-    source: []const u8,
+    source: [:0]const u8,
     banned_prefixes: []const []const u8,
 ) !ProcessResult {
     if (hasSkipComment(source)) {
@@ -433,21 +407,14 @@ pub fn processSource(
         };
     }
 
-    const dup = allocator.dupeZ(u8, source) catch return error.OutOfMemory;
-    var analysis = ast_scan.analyze(allocator, dup) catch |e| {
-        allocator.free(dup);
-        return e;
-    };
-    // Import paths slice into `dup`, but are only read inside analyze
-    // (sorting/classifying); everything downstream uses start/end/class.
-    allocator.free(dup);
+    var analysis = try ast_scan.analyze(allocator, source);
     defer analysis.deinit(allocator);
 
     const block_end = analysis.block_end;
     const imports = analysis.imports.items;
     const aliases = analysis.aliases.items;
 
-    const banned_msg = try hasBannedPatterns(allocator, source, banned_prefixes);
+    const banned_msg = try scanBannedPatterns(allocator, &analysis, banned_prefixes);
     errdefer if (banned_msg) |msg| allocator.free(msg);
 
     if (imports.len == 0) {
@@ -470,7 +437,7 @@ pub fn processSource(
         }
     }
 
-    var rest = source[block_end..];
+    var rest: []const u8 = source[block_end..];
     var rest_owned: ?[]const u8 = null;
     errdefer if (rest_owned) |owned| allocator.free(owned);
     if (stray_imports.items.len > 0) {

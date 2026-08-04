@@ -30,7 +30,7 @@ test "findImportBlockEnd: ends at first non-import" {
         \\
         \\const Foo = struct {
     ;
-    try std.testing.expectEqual("const std = @import(\"std\");\n\n".len, zsort.findImportBlockEnd(source));
+    try std.testing.expectEqual("const std = @import(\"std\");\n\n".len, blockEndForTest(source));
 }
 
 test "findImportBlockEnd: alias to struct-like module does not end block" {
@@ -41,7 +41,7 @@ test "findImportBlockEnd: alias to struct-like module does not end block" {
     ;
     try std.testing.expectEqual(
         "const std = @import(\"std\");\nconst Enum = enums.Kind;\nconst Other = @import(\"other\");".len,
-        zsort.findImportBlockEnd(source),
+        blockEndForTest(source),
     );
 }
 
@@ -103,7 +103,7 @@ test "buildSortedImportText: basic sort" {
         \\
         \\const rest = 1;
     ;
-    const block_end = zsort.findImportBlockEnd(source);
+    const block_end = blockEndForTest(source);
     var imports = try collectImportsForTest(source, block_end);
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
@@ -126,7 +126,7 @@ test "buildSortedImportText: idempotent fix twice" {
         \\
         \\pub fn main() !void {}
     ;
-    const block_end1 = zsort.findImportBlockEnd(source);
+    const block_end1 = blockEndForTest(source);
     var imports1 = try collectImportsForTest(source, block_end1);
     defer imports1.deinit(std.testing.allocator);
     var aliases1 = try collectAliasesForTest(source);
@@ -141,7 +141,7 @@ test "buildSortedImportText: idempotent fix twice" {
 
     const full1_z = try std.testing.allocator.dupeZ(u8, full1.items);
     defer std.testing.allocator.free(full1_z);
-    const block_end2 = zsort.findImportBlockEnd(full1_z);
+    const block_end2 = blockEndForTest(full1_z);
     var imports2 = try collectImportsForTest(full1_z, block_end2);
     defer imports2.deinit(std.testing.allocator);
     var aliases2 = try collectAliasesForTest(full1_z);
@@ -161,7 +161,7 @@ test "buildSortedImportText: comments separating groups" {
         \\
         \\const rest = 1;
     ;
-    const block_end = zsort.findImportBlockEnd(source);
+    const block_end = blockEndForTest(source);
     var imports = try collectImportsForTest(source, block_end);
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
@@ -176,7 +176,19 @@ test "buildSortedImportText: comments separating groups" {
 }
 
 fn collectImportsForTest(source: [:0]const u8, block_end: usize) !std.ArrayListUnmanaged(zsort.Import) {
-    return zsort.collectImports(std.testing.allocator, source, block_end);
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    var imports: std.ArrayListUnmanaged(zsort.Import) = .empty;
+    errdefer imports.deinit(std.testing.allocator);
+    try imports.appendSlice(std.testing.allocator, analysis.imports.items);
+    for (imports.items) |*imp| imp.stray = imp.start >= block_end;
+    return imports;
+}
+
+fn blockEndForTest(source: [:0]const u8) usize {
+    var analysis = zsort.analyze(std.testing.allocator, source) catch return source.len;
+    defer analysis.deinit(std.testing.allocator);
+    return analysis.block_end;
 }
 
 fn collectAliasesForTest(source: [:0]const u8) !std.ArrayListUnmanaged(zsort.Import) {
@@ -200,10 +212,10 @@ test "hasBannedPatterns: backslash-prefixed lines ignored" {
 
 test "collectImports: braces in multiline-string line don't affect depth" {
     const source = "\\\\const a = struct {\nconst real = @import(\"real.zig\");\n";
-    var imports = try zsort.collectImports(std.testing.allocator, source, 0);
-    defer imports.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), imports.items.len);
-    try std.testing.expectEqualStrings("real.zig", imports.items[0].path);
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.imports.items.len);
+    try std.testing.expectEqualStrings("real.zig", analysis.imports.items[0].path);
 }
 
 test "findImportBlockEnd: stops before unterminated alias line" {
@@ -213,7 +225,7 @@ test "findImportBlockEnd: stops before unterminated alias line" {
         \\const Allocator = std.mem
         \\    .Allocator;
     ;
-    try std.testing.expectEqual("const std = @import(\"std\");\n\n".len, zsort.findImportBlockEnd(source));
+    try std.testing.expectEqual("const std = @import(\"std\");\n\n".len, blockEndForTest(source));
 }
 
 test "processSource: hoists multiline stray import intact" {
@@ -308,6 +320,8 @@ test "processSource: import expression ending in brace terminates" {
     const result = try zsort.processSource(std.testing.allocator, source, &.{});
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
+    defer if (result.banned_msg) |msg| std.testing.allocator.free(msg);
+    try std.testing.expect(result.banned);
     try std.testing.expect(!result.changed);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "const x = @import"));
 }
@@ -367,7 +381,9 @@ test "processSource: idempotent" {
     const r1 = try zsort.processSource(std.testing.allocator, source, &.{});
     defer std.testing.allocator.free(r1.new_text);
     defer std.testing.allocator.free(r1.new_block);
-    const r2 = try zsort.processSource(std.testing.allocator, r1.new_text, &.{});
+    const r1_z = try std.testing.allocator.dupeZ(u8, r1.new_text);
+    defer std.testing.allocator.free(r1_z);
+    const r2 = try zsort.processSource(std.testing.allocator, r1_z, &.{});
     defer std.testing.allocator.free(r2.new_text);
     defer std.testing.allocator.free(r2.new_block);
     try std.testing.expect(!r2.changed);
@@ -540,7 +556,7 @@ test "collectImports: classes and sorted order" {
         \\
         \\const rest = 1;
     ;
-    const block_end = zsort.findImportBlockEnd(source);
+    const block_end = blockEndForTest(source);
     var imports = try collectImportsForTest(source, block_end);
     defer imports.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 3), imports.items.len);
@@ -561,7 +577,7 @@ test "buildSortedImportText: comment travels with its import" {
         \\
         \\const rest = 1;
     ;
-    const block_end = zsort.findImportBlockEnd(source);
+    const block_end = blockEndForTest(source);
     var imports = try collectImportsForTest(source, block_end);
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
@@ -582,7 +598,7 @@ test "buildSortedImportText: alias imports hoisted after imports" {
         \\
         \\const rest = 1;
     ;
-    const block_end = zsort.findImportBlockEnd(source);
+    const block_end = blockEndForTest(source);
     var imports = try collectImportsForTest(source, block_end);
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
@@ -720,7 +736,9 @@ test "processSource: trailing comment on multiline import travels" {
     try std.testing.expect(result.changed);
     const late_pos = std.mem.indexOf(u8, result.new_text, "const late") orelse return error.TestUnexpectedResult;
     const joined_pos = std.mem.indexOf(u8, result.new_text, "); // late comment") orelse return error.TestUnexpectedResult;
+    const main_pos = std.mem.indexOf(u8, result.new_text, "pub fn main") orelse return error.TestUnexpectedResult;
     try std.testing.expect(joined_pos > late_pos);
+    try std.testing.expect(joined_pos < main_pos);
 }
 
 test "processSource: cimport block kept intact" {
@@ -774,7 +792,7 @@ test "buildSortedImportText: comment above alias travels" {
         \\
         \\const rest = 1;
     ;
-    const block_end = zsort.findImportBlockEnd(source);
+    const block_end = blockEndForTest(source);
     var imports = try collectImportsForTest(source, block_end);
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);

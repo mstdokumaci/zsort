@@ -84,10 +84,16 @@ pub const Analysis = struct {
     imports: std.ArrayListUnmanaged(Import) = .empty,
     aliases: std.ArrayListUnmanaged(Import) = .empty,
     block_end: usize = 0,
+    /// Every `@import` call in the tree (offset + path), for banned checks.
+    calls: std.ArrayListUnmanaged(ImportCall) = .empty,
+    /// Offsets of `calls` that head a `const` decl initializer (not inline).
+    allowed: std.ArrayListUnmanaged(usize) = .empty,
 
     pub fn deinit(self: *Analysis, allocator: std.mem.Allocator) void {
         self.imports.deinit(allocator);
         self.aliases.deinit(allocator);
+        self.calls.deinit(allocator);
+        self.allowed.deinit(allocator);
     }
 };
 
@@ -124,6 +130,9 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
 
     result.block_end = lineBlockEnd(source, result.imports.items, result.aliases.items);
 
+    result.calls = try importCalls(allocator, tree);
+    result.allowed = try collectAllowedOffsets(allocator, tree);
+
     // Aliases outside the block are left alone (never hoisted).
     var j: usize = 0;
     while (j < result.aliases.items.len) {
@@ -137,6 +146,44 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
     for (result.imports.items) |*imp| imp.stray = imp.start >= result.block_end;
     std.sort.pdq(Import, result.imports.items, {}, Import.lessThan);
     return result;
+}
+
+/// Offsets of every `@import` call that heads a `const` declaration's
+/// initializer, at any nesting depth (direct call or leading dotted chain).
+fn collectAllowedOffsets(allocator: std.mem.Allocator, tree: Ast) !std.ArrayListUnmanaged(usize) {
+    var allowed: std.ArrayListUnmanaged(usize) = .empty;
+    errdefer allowed.deinit(allocator);
+    var i: u32 = 0;
+    while (i < tree.nodes.len) : (i += 1) {
+        const node: Ast.Node.Index = @enumFromInt(i);
+        const vd: ?Ast.full.VarDecl = switch (tree.nodeTag(node)) {
+            .simple_var_decl => tree.simpleVarDecl(node),
+            .local_var_decl => tree.localVarDecl(node),
+            .global_var_decl => tree.globalVarDecl(node),
+            .aligned_var_decl => tree.alignedVarDecl(node),
+            else => null,
+        };
+        const decl = vd orelse continue;
+        if (!std.mem.eql(u8, tree.tokenSlice(decl.ast.mut_token), "const")) continue;
+        const init = decl.ast.init_node.unwrap() orelse continue;
+        if (importHeadOffset(tree, init)) |off| try allowed.append(allocator, off);
+    }
+    return allowed;
+}
+
+/// Offset of the `@import` call heading `init`: `@import("a")` itself, or the
+/// base of a dotted chain like `@import("a").Foo.Bar`.
+fn importHeadOffset(tree: Ast, init: Ast.Node.Index) ?usize {
+    var cur = init;
+    while (tree.nodeTag(cur) == .field_access) {
+        cur = tree.nodeData(cur).node_and_token[0];
+    }
+    switch (tree.nodeTag(cur)) {
+        .builtin_call, .builtin_call_comma, .builtin_call_two, .builtin_call_two_comma => {},
+        else => return null,
+    }
+    if (!std.mem.eql(u8, tree.tokenSlice(tree.firstToken(cur)), "@import")) return null;
+    return tree.tokens.items(.start)[tree.firstToken(cur)];
 }
 
 /// The import block ends at the first line that is not blank, a comment, or
@@ -285,12 +332,15 @@ fn declStart(tree: Ast, node: Ast.Node.Index) usize {
 /// inline comments travel with the import.
 fn spanEnd(tree: Ast, source: []const u8, node: Ast.Node.Index) usize {
     const eof_idx = tree.tokens.len - 1;
-    var t: u32 = tree.lastToken(node);
+    const last_node_token = tree.lastToken(node);
+    var t: u32 = last_node_token;
     while (t < eof_idx) : (t += 1) {
         if (tree.tokens.items(.tag)[t] == .semicolon) {
             return findLineEnd(source, tree.tokens.items(.start)[t]);
         }
+        // Do not cross into a later declaration.
+        if (t > last_node_token and !tree.tokensOnSameLine(last_node_token, t)) break;
     }
-    const last = t - 1;
+    const last = if (t > 0) t - 1 else 0;
     return findLineEnd(source, tree.tokens.items(.start)[last] + @as(u32, @intCast(tree.tokenSlice(last).len)));
 }
