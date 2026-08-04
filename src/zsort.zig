@@ -44,12 +44,12 @@ fn scanBannedPatterns(
 ) !?[]const u8 {
     for (analysis.calls.items) |call| {
         if (std.mem.indexOfScalar(usize, analysis.allowed.items, call.offset) == null) {
-            return allocFmt(allocator, "inline @import in type expression", .{}) orelse return error.OutOfMemory;
+            return allocFmt(allocator, "inline @import inside a type expression", .{}) orelse return error.OutOfMemory;
         }
         if (call.path) |path| {
             for (banned_prefixes) |prefix| {
                 if (std.mem.startsWith(u8, path, prefix)) {
-                    return allocFmt(allocator, "import path starts with banned prefix '{s}'", .{prefix}) orelse return error.OutOfMemory;
+                    return allocFmt(allocator, "imports from '{s}' are not allowed", .{prefix}) orelse return error.OutOfMemory;
                 }
             }
         }
@@ -210,13 +210,15 @@ fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnma
 }
 
 /// Minimal unified-style diff: trims common prefix/suffix lines and shows the
-/// changed middle with up to two context lines around it.
+/// changed middle with up to two context lines around it. When `use_color` is
+/// set, headers, hunks, and changed lines are ANSI-colored git-style.
 /// ponytail: prefix/suffix diff, switch to Myers if multi-hunk noise ever matters
 pub fn formatUnifiedDiff(
     allocator: std.mem.Allocator,
     file_path: []const u8,
     old: []const u8,
     new: []const u8,
+    use_color: bool,
 ) ![]const u8 {
     var old_lines = try splitLines(allocator, old);
     defer old_lines.deinit(allocator);
@@ -238,6 +240,12 @@ pub fn formatUnifiedDiff(
     const after_start = old_lines.items.len - s;
     const after_end = @min(old_lines.items.len, after_start + 2);
 
+    const red = compat.ansi(use_color, compat.ansi_red);
+    const green = compat.ansi(use_color, compat.ansi_green);
+    const cyan = compat.ansi(use_color, compat.ansi_cyan);
+    const dim = compat.ansi(use_color, compat.ansi_dim);
+    const reset = compat.ansi(use_color, compat.ansi_reset);
+
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
     var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
@@ -245,28 +253,28 @@ pub fn formatUnifiedDiff(
     const w = &aw.writer;
 
     if (old_mid.len == 0 and new_mid.len == 0) {
-        try w.print("  --- {s}\n", .{file_path});
-        try w.print("  +++ {s}\n", .{file_path});
-        try w.print("  (trailing newline only)\n", .{});
+        try w.print("  {s}--- {s}{s}\n", .{ red, file_path, reset });
+        try w.print("  {s}+++ {s}{s}\n", .{ green, file_path, reset });
+        try w.print("  {s}(trailing newline only){s}\n", .{ dim, reset });
         try w.writeByte('\n');
         buf = aw.toArrayList();
         return buf.toOwnedSlice(allocator);
     }
 
-    try w.print("  --- {s}\n", .{file_path});
-    try w.print("  +++ {s}\n", .{file_path});
-    try w.print("  @@ -{d},{d} +{d},{d} @@\n", .{ p + 1, old_mid.len, p + 1, new_mid.len });
+    try w.print("  {s}--- {s}{s}\n", .{ red, file_path, reset });
+    try w.print("  {s}+++ {s}{s}\n", .{ green, file_path, reset });
+    try w.print("  {s}@@ -{d},{d} +{d},{d} @@{s}\n", .{ cyan, p + 1, old_mid.len, p + 1, new_mid.len, reset });
     for (old_lines.items[p -| 2..p]) |line| try w.print("   {s}\n", .{line});
-    for (old_mid) |line| try w.print("  - {s}\n", .{line});
-    for (new_mid) |line| try w.print("  + {s}\n", .{line});
+    for (old_mid) |line| try w.print("  {s}- {s}{s}\n", .{ red, line, reset });
+    for (new_mid) |line| try w.print("  {s}+ {s}{s}\n", .{ green, line, reset });
     for (old_lines.items[after_start..after_end]) |line| try w.print("   {s}\n", .{line});
     try w.writeByte('\n');
     buf = aw.toArrayList();
     return buf.toOwnedSlice(allocator);
 }
 
-fn showDiff(io: compat.Io, allocator: std.mem.Allocator, file_path: []const u8, old: []const u8, new: []const u8) void {
-    const diff = formatUnifiedDiff(allocator, file_path, old, new) catch return;
+fn showDiff(io: compat.Io, allocator: std.mem.Allocator, file_path: []const u8, old: []const u8, new: []const u8, use_color: bool) void {
+    const diff = formatUnifiedDiff(allocator, file_path, old, new, use_color) catch return;
     compat.writeStdout(io, diff);
 }
 
@@ -543,11 +551,14 @@ pub fn parseArgs(
         } else if (std.mem.eql(u8, arg, "--version")) {
             show_version = true;
         } else if (std.mem.eql(u8, arg, "--ban-prefix")) {
-            if (i + 1 >= args.len) return error.MissingBanValue;
+            if (i + 1 >= args.len) {
+                err_msg.* = allocFmt(allocator, "--ban-prefix requires a value", .{});
+                return error.MissingBanValue;
+            }
             i += 1;
             try banned_prefixes.append(allocator, args[i]);
         } else if (arg.len > 0 and arg[0] == '-') {
-            err_msg.* = allocFmt(allocator, "unknown option '{s}'", .{arg});
+            err_msg.* = allocFmt(allocator, "Unknown option '{s}'", .{arg});
             return error.UnexpectedArg;
         } else if (mode == null) {
             if (std.mem.eql(u8, arg, "check")) {
@@ -555,13 +566,13 @@ pub fn parseArgs(
             } else if (std.mem.eql(u8, arg, "fix")) {
                 mode = .fix;
             } else {
-                err_msg.* = allocFmt(allocator, "unknown mode '{s}'. Expected 'check' or 'fix'", .{arg});
+                err_msg.* = allocFmt(allocator, "Unknown mode '{s}'. Expected 'check' or 'fix'", .{arg});
                 return error.InvalidMode;
             }
         } else if (target == null) {
             target = arg;
         } else {
-            err_msg.* = allocFmt(allocator, "unexpected argument '{s}'", .{arg});
+            err_msg.* = allocFmt(allocator, "Unexpected argument '{s}'", .{arg});
             return error.UnexpectedArg;
         }
     }
@@ -575,9 +586,17 @@ pub fn parseArgs(
             .version = show_version,
         };
     }
+    if (mode == null) {
+        err_msg.* = allocFmt(allocator, "Missing mode and target", .{});
+        return error.Usage;
+    }
+    if (target == null) {
+        err_msg.* = allocFmt(allocator, "Missing target", .{});
+        return error.Usage;
+    }
     return .{
-        .mode = mode orelse return error.Usage,
-        .target = target orelse return error.Usage,
+        .mode = mode.?,
+        .target = target.?,
         .banned_prefixes = banned_prefixes,
     };
 }
@@ -596,35 +615,59 @@ pub fn formatSummary(
     mode: CliMode,
     use_color: bool,
 ) ?[]const u8 {
-    const on = "\x1b[33m";
-    const off = "\x1b[39m";
+    const yellow = compat.ansi(use_color, compat.ansi_yellow);
+    const red = compat.ansi(use_color, compat.ansi_red);
+    const magenta = compat.ansi(use_color, compat.ansi_magenta);
+    const reset = compat.ansi(use_color, compat.ansi_reset);
+    const file_word = if (stats.files == 1) "file" else "files";
     const ms = @divTrunc(stats.elapsed_ns, std.time.ns_per_ms);
-    if (use_color) {
-        return switch (mode) {
-            .check => allocFmt(allocator, "\t{[0]s}{[2]d}{[1]s} needs fixing, {[0]s}{[3]d}{[1]s} errors, {[0]s}{[4]d}{[1]s} banned across {[0]s}{[5]d}{[1]s} files in {[0]s}{[6]d}{[1]s}ms.\n", .{ on, off, stats.changed, stats.errors, stats.banned, stats.files, ms }),
-            .fix => allocFmt(allocator, "\n\tFixed {[0]s}{[2]d}{[1]s} files, {[0]s}{[3]d}{[1]s} errors, {[0]s}{[4]d}{[1]s} banned across {[0]s}{[5]d}{[1]s} files in {[0]s}{[6]d}{[1]s}ms.\n", .{ on, off, stats.changed, stats.errors, stats.banned, stats.files, ms }),
-        };
-    }
     return switch (mode) {
-        .check => allocFmt(allocator, "\t{d} needs fixing, {d} errors, {d} banned across {d} files in {d}ms.\n", .{ stats.changed, stats.errors, stats.banned, stats.files, ms }),
-        .fix => allocFmt(allocator, "\n\tFixed {d} files, {d} errors, {d} banned across {d} files in {d}ms.\n", .{ stats.changed, stats.errors, stats.banned, stats.files, ms }),
+        .check => allocFmt(
+            allocator,
+            "  Found {[0]s}{[2]d}{[1]s} of {[0]s}{[6]d}{[1]s} {[7]s} to fix, {[3]s}{[4]d}{[1]s} failed, {[5]s}{[8]d}{[1]s} banned in {[0]s}{[9]d}{[1]s}ms.\n",
+            .{ yellow, reset, stats.changed, red, stats.errors, magenta, stats.files, file_word, stats.banned, ms },
+        ),
+        .fix => allocFmt(
+            allocator,
+            "\n  Fixed {[0]s}{[2]d}{[1]s} of {[0]s}{[6]d}{[1]s} {[7]s}, {[3]s}{[4]d}{[1]s} failed, {[5]s}{[8]d}{[1]s} banned in {[0]s}{[9]d}{[1]s}ms.\n",
+            .{ yellow, reset, stats.changed, red, stats.errors, magenta, stats.files, file_word, stats.banned, ms },
+        ),
     };
 }
 
-fn printHelp(io: compat.Io) void {
-    compat.printStdout(io,
-        \\Usage: zsort [check|fix] <dir|file> [options]
-        \\
-        \\Modes:
-        \\  check              Verify Zig import ordering; exits 1 when changes are needed
-        \\  fix                Rewrite files with sorted imports
-        \\
-        \\Options:
-        \\  --ban-prefix <p>   Reject import paths starting with prefix (repeatable)
-        \\  -h, --help         Show this help message
-        \\  --version          Print version and exit
-        \\
-    , .{});
+fn printHelp(io: compat.Io, use_color: bool) void {
+    if (use_color) {
+        const bold = compat.ansi_bold;
+        const yellow = compat.ansi_yellow;
+        const reset = compat.ansi_reset;
+        compat.printStdout(io,
+            \\Usage: zsort [check|fix] <dir|file> [options]
+            \\
+            \\{[0]s}Modes:{[1]s}
+            \\  {[2]s}check{[1]s}              Verify Zig import ordering; exit code 1 when changes are needed
+            \\  {[2]s}fix{[1]s}                Rewrite files, sorting their imports
+            \\
+            \\{[0]s}Options:{[1]s}
+            \\  {[2]s}--ban-prefix <p>{[1]s}   Reject import paths starting with this prefix (repeatable)
+            \\  {[2]s}-h, --help{[1]s}         Show this help message
+            \\  {[2]s}--version{[1]s}          Print version and exit
+            \\
+        , .{ bold, reset, yellow });
+    } else {
+        compat.printStdout(io,
+            \\Usage: zsort [check|fix] <dir|file> [options]
+            \\
+            \\Modes:
+            \\  check              Verify Zig import ordering; exit code 1 when changes are needed
+            \\  fix                Rewrite files, sorting their imports
+            \\
+            \\Options:
+            \\  --ban-prefix <p>   Reject import paths starting with this prefix (repeatable)
+            \\  -h, --help         Show this help message
+            \\  --version          Print version and exit
+            \\
+        , .{});
+    }
 }
 
 const JobSlot = struct {
@@ -656,24 +699,36 @@ fn processFileJob(job: *const FileJob, io: compat.Io) void {
 
 pub const main = compat.entry(runMain).main;
 
+/// Parse/usage failures: the reason (red, indented) followed by the usage
+/// block (plain, flush left) so the reader gets the fix after the problem.
+fn printParseError(io: compat.Io, use_color: bool, err_msg: []const u8) void {
+    const red = compat.ansi(use_color, compat.ansi_red);
+    const reset = compat.ansi(use_color, compat.ansi_reset);
+    compat.printStderr(io, "  {s}{s}{s}\n\n", .{ red, err_msg, reset });
+    compat.printStderr(io,
+        \\Usage: zsort [check|fix] <dir|file> [options]
+        \\Run 'zsort --help' for details.
+        \\
+    , .{});
+}
+
 fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io) !void {
+    const color = compat.isTty(io);
+    const color_err = compat.isStderrTty(io);
+
+    const out_green = compat.ansi(color, compat.ansi_bold ++ compat.ansi_green);
+    const out_yellow = compat.ansi(color, compat.ansi_yellow);
+    const out_reset = compat.ansi(color, compat.ansi_reset);
+
+    const err_red = compat.ansi(color_err, compat.ansi_red);
+    const err_yellow = compat.ansi(color_err, compat.ansi_yellow);
+    const err_magenta = compat.ansi(color_err, compat.ansi_magenta);
+    const err_reset = compat.ansi(color_err, compat.ansi_reset);
+
     var err_msg: ?[]const u8 = null;
     var parsed = parseArgs(allocator, args, &err_msg) catch |e| switch (e) {
-        error.Usage => {
-            std.debug.print("Usage: zsort [check|fix] <dir|file> [--ban-prefix <prefix>]...\n", .{});
-            std.debug.print("Run 'zsort --help' for details.\n", .{});
-            std.process.exit(1);
-        },
-        error.InvalidMode => {
-            std.debug.print("Invalid mode: {s}\n", .{err_msg orelse "expected 'check' or 'fix'"});
-            std.process.exit(1);
-        },
-        error.MissingBanValue => {
-            std.debug.print("Missing value for --ban-prefix\n", .{});
-            std.process.exit(1);
-        },
-        error.UnexpectedArg => {
-            std.debug.print("Unexpected argument: {s}\n", .{err_msg orelse ""});
+        error.Usage, error.InvalidMode, error.MissingBanValue, error.UnexpectedArg => {
+            printParseError(io, color_err, err_msg orelse "invalid arguments");
             std.process.exit(1);
         },
         error.OutOfMemory => return error.OutOfMemory,
@@ -681,7 +736,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     defer parsed.deinit(allocator);
 
     if (parsed.help) {
-        printHelp(io);
+        printHelp(io, color);
         return;
     }
     if (parsed.version) {
@@ -693,7 +748,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     defer files.deinit(allocator);
 
     const stat = compat.statFile(io, compat.cwd(), parsed.target) catch |err| {
-        std.debug.print("Cannot access '{s}': {s}\n", .{ parsed.target, @errorName(err) });
+        compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, parsed.target, @errorName(err), err_reset });
         std.process.exit(1);
     };
 
@@ -705,12 +760,12 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     } else if (stat.kind == .file) {
         try files.append(allocator, parsed.target);
     } else {
-        std.debug.print("'{s}' is not a supported file or directory\n", .{parsed.target});
+        compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, parsed.target, err_reset });
         std.process.exit(1);
     }
 
     if (files.items.len == 0) {
-        std.debug.print("No .zig files found in '{s}'\n", .{parsed.target});
+        compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, parsed.target, err_reset });
         std.process.exit(1);
     }
 
@@ -753,18 +808,18 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         const file_path = job.path;
 
         if (slot.read_err) |msg| {
-            std.debug.print("Error reading {s}: {s}\n", .{ file_path, msg });
+            compat.printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, file_path, err_reset, err_red, msg, err_reset });
             error_count += 1;
             continue;
         }
         if (slot.proc_err) |msg| {
-            std.debug.print("Error processing {s}: {s}\n", .{ file_path, msg });
+            compat.printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, file_path, err_reset, err_red, msg, err_reset });
             error_count += 1;
             continue;
         }
         const result = slot.result orelse continue;
         if (result.banned_msg) |msg| {
-            std.debug.print("{s}: banned: {s}\n", .{ file_path, msg });
+            compat.printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, file_path, err_reset, err_magenta, err_reset, msg });
             banned_count += 1;
         }
         if (!result.changed) continue;
@@ -774,18 +829,18 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         if (parsed.mode == .fix) {
             fixFile: {
                 compat.atomicWrite(io, compat.cwd(), file_path, result.new_text) catch |err| {
-                    std.debug.print("Error writing {s}: {s}\n", .{ file_path, @errorName(err) });
+                    compat.printStderr(io, "  {s}Error writing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, file_path, err_reset, err_red, @errorName(err), err_reset });
                     error_count += 1;
                     break :fixFile;
                 };
                 fixed_count += 1;
-                compat.printStdout(io, "Fixed: {s}\n", .{file_path});
+                compat.printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, file_path, out_reset });
             }
         } else {
             if (result.stray_count > 0) {
-                showDiff(io, allocator, file_path, slot.source, result.new_text);
+                showDiff(io, allocator, file_path, slot.source, result.new_text, color);
             } else {
-                showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block);
+                showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block, color);
             }
         }
     }
@@ -798,14 +853,14 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         .elapsed_ns = timer.read(),
     };
     if (parsed.mode == .check) {
-        if (formatSummary(allocator, stats, .check, compat.isTty(io))) |summary| {
+        if (formatSummary(allocator, stats, .check, color)) |summary| {
             compat.printStdout(io, "{s}", .{summary});
         }
         if (changed_count > 0 or error_count > 0 or banned_count > 0) {
             std.process.exit(1);
         }
     } else {
-        if (formatSummary(allocator, stats, .fix, compat.isTty(io))) |summary| {
+        if (formatSummary(allocator, stats, .fix, color)) |summary| {
             compat.printStdout(io, "{s}", .{summary});
         }
         if (error_count > 0 or banned_count > 0) std.process.exit(1);

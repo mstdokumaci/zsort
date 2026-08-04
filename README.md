@@ -9,6 +9,8 @@ attached comments travel with their imports.
 ## Requirements
 
 - Zig **0.15.2 or newer** (Zig 0.16 is supported)
+- A Unix-like operating system (Linux or macOS). Windows is not supported —
+  on Windows, run `zsort` inside [WSL2](https://learn.microsoft.com/windows/wsl/).
 
 ## Installation
 
@@ -36,7 +38,7 @@ Linux and macOS binaries are attached to each
 Run:
 
 ```sh
-zig fetch --save https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz
+zig fetch --save https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.4.0.tar.gz
 ```
 
 To add zsort to your `build.zig.zon`:
@@ -48,7 +50,7 @@ To add zsort to your `build.zig.zon`:
     // .fingerprint
     .dependencies = .{
         .zsort = .{
-            .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz",
+            .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.4.0.tar.gz",
             // .hash
             .lazy = true,
         },
@@ -100,11 +102,11 @@ The binary is written to `zig-out/bin/zsort`.
 Usage: zsort [check|fix] <dir|file> [options]
 
 Modes:
-  check              Verify Zig import ordering; exits 1 when changes are needed
-  fix                Rewrite files with sorted imports
+  check              Verify Zig import ordering; exit code 1 when changes are needed
+  fix                Rewrite files, sorting their imports
 
 Options:
-  --ban-prefix <p>   Reject import paths starting with prefix (repeatable)
+  --ban-prefix <p>   Reject import paths starting with this prefix (repeatable)
   -h, --help         Show this help message
   --version          Print version and exit
 ```
@@ -197,10 +199,11 @@ paths, along with `.git`, `.zig-cache`, `zig-cache`, and `zig-out`.
 > A pattern like `build` matches `build/` and `a/build/x.zig`, but not
 > `build-tools/x.zig`.
 
-## Contributing
+## See Also
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, lint gates,
-and contribution guidelines. Release history is in [CHANGELOG.md](CHANGELOG.md).
+- [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, lint gates,
+and contribution guidelines.
+- [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 

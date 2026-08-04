@@ -501,7 +501,7 @@ test "loadGitignore: missing file yields empty list" {
 test "formatUnifiedDiff: local reorder with context" {
     const old = "const bar = @import(\"bar\");\nconst std = @import(\"std\");\n\nconst rest = 1;\n";
     const new = "const std = @import(\"std\");\nconst bar = @import(\"bar\");\n\nconst rest = 1;\n";
-    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "test.zig", old, new);
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "test.zig", old, new, false);
     defer std.testing.allocator.free(diff);
     const expected = "  --- test.zig\n" ++
         "  +++ test.zig\n" ++
@@ -517,7 +517,7 @@ test "formatUnifiedDiff: local reorder with context" {
 }
 
 test "formatUnifiedDiff: whole-file replace" {
-    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "x\ny\n");
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "x\ny\n", false);
     defer std.testing.allocator.free(diff);
     const expected = "  --- t.zig\n" ++
         "  +++ t.zig\n" ++
@@ -531,7 +531,7 @@ test "formatUnifiedDiff: whole-file replace" {
 }
 
 test "formatUnifiedDiff: CRLF input diffs cleanly" {
-    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\r\nb\r\n", "a\r\nc\r\n");
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\r\nb\r\n", "a\r\nc\r\n", false);
     defer std.testing.allocator.free(diff);
     const expected = "  --- t.zig\n" ++
         "  +++ t.zig\n" ++
@@ -544,12 +544,38 @@ test "formatUnifiedDiff: CRLF input diffs cleanly" {
 }
 
 test "formatUnifiedDiff: trailing-newline difference emits marker" {
-    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "a\nb");
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "a\nb", false);
     defer std.testing.allocator.free(diff);
     try std.testing.expectEqualStrings(
         "  --- t.zig\n" ++
             "  +++ t.zig\n" ++
             "  (trailing newline only)\n" ++
+            "\n",
+        diff,
+    );
+}
+
+test "formatUnifiedDiff: colorized git-style when enabled" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "x\ny\n", true);
+    defer std.testing.allocator.free(diff);
+    const expected = "  \x1b[31m--- t.zig\x1b[0m\n" ++
+        "  \x1b[32m+++ t.zig\x1b[0m\n" ++
+        "  \x1b[36m@@ -1,2 +1,2 @@\x1b[0m\n" ++
+        "  \x1b[31m- a\x1b[0m\n" ++
+        "  \x1b[31m- b\x1b[0m\n" ++
+        "  \x1b[32m+ x\x1b[0m\n" ++
+        "  \x1b[32m+ y\x1b[0m\n" ++
+        "\n";
+    try std.testing.expectEqualStrings(expected, diff);
+}
+
+test "formatUnifiedDiff: trailing-newline marker is dimmed when colored" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "a\nb", true);
+    defer std.testing.allocator.free(diff);
+    try std.testing.expectEqualStrings(
+        "  \x1b[31m--- t.zig\x1b[0m\n" ++
+            "  \x1b[32m+++ t.zig\x1b[0m\n" ++
+            "  \x1b[2m(trailing newline only)\x1b[0m\n" ++
             "\n",
         diff,
     );
@@ -1125,7 +1151,16 @@ test "parseArgs: errors" {
     defer if (msg) |m| std.testing.allocator.free(m);
 
     try std.testing.expectError(error.Usage, zsort.parseArgs(std.testing.allocator, &.{"zsort"}, &msg));
+    try std.testing.expect(msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "Missing mode and target") != null);
+    std.testing.allocator.free(msg.?);
+    msg = null;
+
     try std.testing.expectError(error.Usage, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check" }, &msg));
+    try std.testing.expect(msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "Missing target") != null);
+    std.testing.allocator.free(msg.?);
+    msg = null;
 
     try std.testing.expectError(error.InvalidMode, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "fixx", "src" }, &msg));
     try std.testing.expect(msg != null);
@@ -1134,6 +1169,10 @@ test "parseArgs: errors" {
     msg = null;
 
     try std.testing.expectError(error.MissingBanValue, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "--ban-prefix" }, &msg));
+    try std.testing.expect(msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "requires a value") != null);
+    std.testing.allocator.free(msg.?);
+    msg = null;
 
     try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "extra" }, &msg));
     try std.testing.expect(msg != null);
@@ -1143,7 +1182,7 @@ test "parseArgs: errors" {
 
     try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "--bogus" }, &msg));
     try std.testing.expect(msg != null);
-    try std.testing.expect(std.mem.indexOf(u8, msg.?, "unknown option") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg.?, "Unknown option") != null);
     try std.testing.expect(std.mem.indexOf(u8, msg.?, "--bogus") != null);
 }
 
@@ -1156,7 +1195,7 @@ test "formatSummary: check mode, plain without color" {
         .elapsed_ns = 12 * std.time.ns_per_ms,
     }, .check, false) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
-    try std.testing.expectEqualStrings("\t1 needs fixing, 2 errors, 0 banned across 179 files in 12ms.\n", s);
+    try std.testing.expectEqualStrings("  Found 1 of 179 files to fix, 2 failed, 0 banned in 12ms.\n", s);
 }
 
 test "formatSummary: fix mode, plain without color" {
@@ -1168,10 +1207,10 @@ test "formatSummary: fix mode, plain without color" {
         .elapsed_ns = 500_000,
     }, .fix, false) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
-    try std.testing.expectEqualStrings("\n\tFixed 0 files, 0 errors, 0 banned across 179 files in 0ms.\n", s);
+    try std.testing.expectEqualStrings("\n  Fixed 0 of 179 files, 0 failed, 0 banned in 0ms.\n", s);
 }
 
-test "formatSummary: colorized numbers, sub-ms truncates to 0ms" {
+test "formatSummary: colorized per-category numbers, sub-ms truncates to 0ms" {
     const s = zsort.formatSummary(std.testing.allocator, .{
         .changed = 0,
         .errors = 0,
@@ -1180,7 +1219,7 @@ test "formatSummary: colorized numbers, sub-ms truncates to 0ms" {
         .elapsed_ns = 500_000,
     }, .check, true) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
-    try std.testing.expectEqualStrings("\t\x1b[33m0\x1b[39m needs fixing, \x1b[33m0\x1b[39m errors, \x1b[33m0\x1b[39m banned across \x1b[33m179\x1b[39m files in \x1b[33m0\x1b[39mms.\n", s);
+    try std.testing.expectEqualStrings("  Found \x1b[33m0\x1b[0m of \x1b[33m179\x1b[0m files to fix, \x1b[31m0\x1b[0m failed, \x1b[35m0\x1b[0m banned in \x1b[33m0\x1b[0mms.\n", s);
     try std.testing.expect(std.mem.indexOf(u8, s, "\x1b[") != null);
 }
 
@@ -1194,4 +1233,16 @@ test "formatSummary: no escape bytes when color disabled" {
     }, .check, false) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
     try std.testing.expect(std.mem.indexOf(u8, s, "\x1b[") == null);
+}
+
+test "formatSummary: single-file target uses singular 'file'" {
+    const s = zsort.formatSummary(std.testing.allocator, .{
+        .changed = 1,
+        .errors = 0,
+        .banned = 0,
+        .files = 1,
+        .elapsed_ns = 2 * std.time.ns_per_ms,
+    }, .check, false) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(s);
+    try std.testing.expectEqualStrings("  Found 1 of 1 file to fix, 0 failed, 0 banned in 2ms.\n", s);
 }
