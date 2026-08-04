@@ -66,7 +66,7 @@ pub fn findCommentStart(source: []const u8, line_start: usize) ?usize {
     while (true) {
         const prev_start = findLineStart(source, back);
         const prev_end = findLineEnd(source, prev_start);
-        const prev_trimmed = std.mem.trimStart(u8, source[prev_start..prev_end], " \t\r");
+        const prev_trimmed = std.mem.trim(u8, source[prev_start..prev_end], " \t\r\n");
         if (prev_trimmed.len == 0 or std.mem.startsWith(u8, prev_trimmed, "//")) {
             comment_start = prev_start;
             if (prev_start == 0) return null;
@@ -88,8 +88,13 @@ pub const Analysis = struct {
     calls: std.ArrayListUnmanaged(ImportCall) = .empty,
     /// Offsets of `calls` that head a `const` decl initializer (not inline).
     allowed: std.ArrayListUnmanaged(usize) = .empty,
+    /// Decoded import paths that no longer slice into `source` (escaped
+    /// literals), freed by deinit.
+    owned_paths: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn deinit(self: *Analysis, allocator: std.mem.Allocator) void {
+        for (self.owned_paths.items) |p| allocator.free(p);
+        self.owned_paths.deinit(allocator);
         self.imports.deinit(allocator);
         self.aliases.deinit(allocator);
         self.calls.deinit(allocator);
@@ -103,7 +108,8 @@ const Found = struct {
 };
 
 /// `source` must be sentinel-terminated; returned `Import.path` slices point
-/// into it, so it must outlive the analysis.
+/// into it (or into `Analysis.owned_paths` for escaped literals), so both
+/// must outlive the analysis.
 pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
     var tree = try std.zig.Ast.parse(allocator, source, .zig);
     defer tree.deinit(allocator);
@@ -118,7 +124,7 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
             .aligned_var_decl => tree.alignedVarDecl(node),
             else => null,
         };
-        const found = if (vd) |decl| classifyDecl(tree, source, node, decl) else null;
+        const found = if (vd) |decl| try classifyDecl(allocator, &result.owned_paths, tree, source, node, decl) else null;
         if (found) |f| {
             if (f.alias) {
                 try result.aliases.append(allocator, f.imp);
@@ -130,7 +136,7 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
 
     result.block_end = lineBlockEnd(source, result.imports.items, result.aliases.items);
 
-    result.calls = try importCalls(allocator, tree);
+    result.calls = try importCalls(allocator, &result.owned_paths, tree);
     result.allowed = try collectAllowedOffsets(allocator, tree);
 
     // Aliases outside the block are left alone (never hoisted).
@@ -227,7 +233,7 @@ pub const ImportCall = struct {
     path: ?[]const u8,
 };
 
-pub fn importCalls(allocator: std.mem.Allocator, tree: Ast) !std.ArrayListUnmanaged(ImportCall) {
+pub fn importCalls(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]const u8), tree: Ast) !std.ArrayListUnmanaged(ImportCall) {
     var calls: std.ArrayListUnmanaged(ImportCall) = .empty;
     errdefer calls.deinit(allocator);
 
@@ -242,13 +248,13 @@ pub fn importCalls(allocator: std.mem.Allocator, tree: Ast) !std.ArrayListUnmana
         const arg = builtinArg(tree, node);
         try calls.append(allocator, .{
             .offset = tree.tokens.items(.start)[tree.firstToken(node)],
-            .path = if (arg) |a| stringPath(tree, a) else null,
+            .path = if (arg) |a| try stringPath(allocator, owned, tree, a) else null,
         });
     }
     return calls;
 }
 
-fn classifyDecl(tree: Ast, source: []const u8, node: Ast.Node.Index, vd: Ast.full.VarDecl) ?Found {
+fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]const u8), tree: Ast, source: []const u8, node: Ast.Node.Index, vd: Ast.full.VarDecl) !?Found {
     if (!std.mem.eql(u8, tree.tokenSlice(vd.ast.mut_token), "const")) return null;
     const init = vd.ast.init_node.unwrap() orelse return null;
     const init_slice = tree.tokenSlice(tree.firstToken(init));
@@ -260,7 +266,7 @@ fn classifyDecl(tree: Ast, source: []const u8, node: Ast.Node.Index, vd: Ast.ful
             .{ "<cimport>", class_third_party }
         else blk: {
             const arg = builtinArg(tree, init) orelse return null;
-            const p = stringPath(tree, arg) orelse return null;
+            const p = (try stringPath(allocator, owned, tree, arg)) orelse return null;
             break :blk .{ p, classify(p) };
         };
         return .{ .imp = .{
@@ -299,11 +305,19 @@ fn builtinArg(tree: Ast, call: Ast.Node.Index) ?Ast.Node.Index {
     return args[0].unwrap();
 }
 
-fn stringPath(tree: Ast, arg: Ast.Node.Index) ?[]const u8 {
+/// Path of a string-literal argument: the raw token body when it contains no
+/// escapes, otherwise the decoded contents stored in `owned`. Returns null
+/// for non-string or invalid (multiline) literals.
+fn stringPath(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]const u8), tree: Ast, arg: Ast.Node.Index) !?[]const u8 {
     if (tree.nodeTag(arg) != .string_literal) return null;
     const lit = tree.tokenSlice(tree.firstToken(arg));
     if (lit.len < 2) return null;
-    return lit[1 .. lit.len - 1];
+    const body = lit[1 .. lit.len - 1];
+    if (std.mem.indexOfScalar(u8, body, '\\') == null) return body;
+    if (lit[0] != '"' or lit[lit.len - 1] != '"') return null;
+    const decoded = std.zig.string_literal.parseAlloc(allocator, lit) catch return null;
+    try owned.append(allocator, decoded);
+    return decoded;
 }
 
 /// Single-line, whitespace-free dotted chain starting with an identifier:
@@ -327,20 +341,15 @@ fn declStart(tree: Ast, node: Ast.Node.Index) usize {
     return tree.tokens.items(.start)[tree.firstToken(node)];
 }
 
-/// End of an import/alias span: decl nodes exclude the trailing `;`, so
-/// extend to the next `;` token, then to the end of that line so trailing
-/// inline comments travel with the import.
+/// End of an import/alias span: the `;` immediately following the decl's
+/// last token (decl nodes exclude it), then to the end of that line so
+/// trailing inline comments travel with the import. A missing `;` ends the
+/// span at the last token's line instead of crossing into a later decl.
 fn spanEnd(tree: Ast, source: []const u8, node: Ast.Node.Index) usize {
-    const eof_idx = tree.tokens.len - 1;
     const last_node_token = tree.lastToken(node);
-    var t: u32 = last_node_token;
-    while (t < eof_idx) : (t += 1) {
-        if (tree.tokens.items(.tag)[t] == .semicolon) {
-            return findLineEnd(source, tree.tokens.items(.start)[t]);
-        }
-        // Do not cross into a later declaration.
-        if (t > last_node_token and !tree.tokensOnSameLine(last_node_token, t)) break;
+    const next = last_node_token + 1;
+    if (next < tree.tokens.len and tree.tokens.items(.tag)[next] == .semicolon) {
+        return findLineEnd(source, tree.tokens.items(.start)[next]);
     }
-    const last = if (t > 0) t - 1 else 0;
-    return findLineEnd(source, tree.tokens.items(.start)[last] + @as(u32, @intCast(tree.tokenSlice(last).len)));
+    return findLineEnd(source, tree.tokens.items(.start)[last_node_token] + @as(u32, @intCast(tree.tokenSlice(last_node_token).len)));
 }

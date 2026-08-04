@@ -333,6 +333,13 @@ test "hasBannedPatterns: whitespace after @import( still detected" {
     try std.testing.expect(std.mem.indexOf(u8, msg, "./") != null);
 }
 
+test "hasBannedPatterns: escaped path decoded before prefix check" {
+    const source = "const foo = @import(\"\\x2e/bar\");\n";
+    const msg = try zsort.hasBannedPatterns(std.testing.allocator, source, &.{"./"}) orelse return error.TestFailed;
+    defer std.testing.allocator.free(msg);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "./") != null);
+}
+
 test "processSource: collapses consecutive CRLF blank lines" {
     const source = "// h\r\n\r\n\r\nconst bar = @import(\"bar\");\r\n\r\npub fn main() {}\r\n";
     const result = try zsort.processSource(std.testing.allocator, source, &.{});
@@ -591,6 +598,27 @@ test "buildSortedImportText: comment travels with its import" {
     try std.testing.expect(std_pos < bar_pos);
 }
 
+test "buildSortedImportText: blank-line-separated comment travels with its import" {
+    const source =
+        \\const bar = @import("bar");
+        \\// std comment
+        \\
+        \\const std = @import("std");
+        \\
+        \\const rest = 1;
+    ;
+    const block_end = blockEndForTest(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    var aliases = try collectAliasesForTest(source);
+    defer aliases.deinit(std.testing.allocator);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    defer std.testing.allocator.free(result);
+    const std_pos = std.mem.indexOf(u8, result, "const std") orelse return error.TestUnexpectedResult;
+    const comment_pos = std.mem.indexOf(u8, result, "// std comment") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(comment_pos < std_pos);
+}
+
 test "buildSortedImportText: alias imports hoisted after imports" {
     const source =
         \\const bar = @import("bar");
@@ -637,6 +665,24 @@ test "analyze: typed import is collected" {
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.imports.items.len);
     try std.testing.expectEqualStrings("a", analysis.imports.items[0].path);
+}
+
+test "analyze: escaped import path is decoded" {
+    const source = "const foo = @import(\"\\x2ffoo.zig\");\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.imports.items.len);
+    try std.testing.expectEqualStrings("/foo.zig", analysis.imports.items[0].path);
+    try std.testing.expectEqual(zsort.class_local, analysis.imports.items[0].class);
+}
+
+test "analyze: escaped paths sort by decoded text" {
+    const source = "const first = @import(\"\\x7a\");\nconst second = @import(\"\\x61\");\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), analysis.imports.items.len);
+    try std.testing.expectEqualStrings("a", analysis.imports.items[0].path);
+    try std.testing.expectEqualStrings("z", analysis.imports.items[1].path);
 }
 
 test "analyze: var import is not collected" {
