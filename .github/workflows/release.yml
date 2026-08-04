@@ -1,0 +1,38 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Build and package cross-target binaries
+        run: |
+          set -euo pipefail
+          for target in x86_64-linux aarch64-linux x86_64-macos aarch64-macos; do
+            zig build -Doptimize=ReleaseFast -Dtarget="$target"
+            tar -C zig-out/bin -czf "zsort-$target.tar.gz" zsort
+            rm -rf zig-out
+          done
+      - name: Smoke test the linux binary
+        run: |
+          set -euo pipefail
+          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux
+          ./zig-out/bin/zsort --version
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: zsort-*.tar.gz
+          generate_release_notes: true

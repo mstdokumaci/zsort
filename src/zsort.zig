@@ -4,17 +4,15 @@ const std = @import("std");
 
 const ast_scan = @import("ast_scan.zig");
 const compat = @import("compat.zig");
-
-pub const version = "0.2.0";
-
-pub const class_std_builtin = ast_scan.class_std_builtin;
-pub const class_third_party = ast_scan.class_third_party;
-pub const class_local = ast_scan.class_local;
-pub const Import = ast_scan.Import;
-pub const classify = ast_scan.classify;
-pub const analyze = ast_scan.analyze;
+pub const version = @import("version.zig").version;
 
 const findLineEnd = ast_scan.findLineEnd;
+pub const Import = ast_scan.Import;
+pub const analyze = ast_scan.analyze;
+pub const class_local = ast_scan.class_local;
+pub const class_std_builtin = ast_scan.class_std_builtin;
+pub const class_third_party = ast_scan.class_third_party;
+pub const classify = ast_scan.classify;
 
 /// Emit the comment block attached to a decl (`source[comment_start..imp.start]`),
 /// dropping blank lines: `findCommentStart` walks back over blanks, but a
