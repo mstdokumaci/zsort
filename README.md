@@ -111,23 +111,38 @@ fixing, errors, or banned imports are found.
 
 ## Ordering rules
 
-Imports are classified into three groups, in this order:
+`zsort` collects three kinds of top-of-file declarations:
 
-1. **std/builtin** — `std`, `builtin`
-2. **third-party** — any other module name (`sqlite`, `httpz`, ...)
-3. **local** — `root`, `build_root`, paths containing `/`, and paths ending in `.zig`
+1. **plain imports** — `const x = @import("path");`
+2. **member imports** — `const X = @import("path").Member;` (the member access is
+   ignored for ordering; the base path is the sort key)
+3. **aliases** — `const X = module.Member;` (a dotted chain without `@import`)
 
-Within each group, imports are sorted by path, then by import-text length, then
-by original position (so identical imports stay stable). Groups are separated
-by a blank line. `@cImport` blocks are treated as third-party imports and
+They are emitted in bands, in this order, with a blank line between bands:
+
+1. **std/builtin** — plain, then member (`std`, `builtin`)
+2. **third-party** — plain, then member (`sqlite`, `httpz`, ...)
+3. **local** — plain, then member (`root`, `build_root`, paths containing `/`,
+   paths ending in `.zig`)
+4. **aliases** — ordered std/builtin → third-party → local, no blank lines
+   inside the band. An alias is keyed by the import path its module name
+   resolves to (`const Connection = connection_state.Connection;` sorts as
+   `connection/state.zig`); unresolvable bases (local structs, unimported
+   names) keep the chain text.
+
+Within a band, imports are sorted by **path**, byte-wise (`a.zig` before
+`aa.zig`), and identical paths tie-break on the full declaration text. Sorting
+never depends on source position: the same set of imports in any order yields
+the same output. `@cImport` blocks are treated as third-party imports and
 moved as a whole.
 
 ### What `fix` does
 
-- Sorts and groups top-of-file imports
+- Sorts and groups top-of-file imports into the bands above
 - Organizes typed imports (`const x: SomeType = @import(...)`) like plain ones
 - Hoists imports that appear later in the file into their proper group
-- Keeps comments that immediately precede an import attached to it
+- Keeps comments that immediately precede an import attached to it (blank
+  lines do not travel with an import)
 - Preserves `//!` module documentation and the file's line endings (CRLF kept)
 
 ### Escape hatches

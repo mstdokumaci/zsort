@@ -5,7 +5,7 @@ const std = @import("std");
 const ast_scan = @import("ast_scan.zig");
 const compat = @import("compat.zig");
 
-pub const version = "0.1.0";
+pub const version = "0.2.0";
 
 pub const class_std_builtin = ast_scan.class_std_builtin;
 pub const class_third_party = ast_scan.class_third_party;
@@ -15,6 +15,22 @@ pub const classify = ast_scan.classify;
 pub const analyze = ast_scan.analyze;
 
 const findLineEnd = ast_scan.findLineEnd;
+
+/// Emit the comment block attached to a decl (`source[comment_start..imp.start]`),
+/// dropping blank lines: `findCommentStart` walks back over blanks, but a
+/// blank line must not travel with the decl, or the output would depend on
+/// the input order.
+fn appendCommentBlock(allocator: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), block: []const u8) !void {
+    var pos: usize = 0;
+    while (pos < block.len) {
+        const le = findLineEnd(block, pos);
+        const line = block[pos..le];
+        if (std.mem.startsWith(u8, std.mem.trim(u8, line, " \t\r\n"), "//")) {
+            try buf.appendSlice(allocator, line);
+        }
+        pos = le;
+    }
+}
 
 fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ?[]const u8 {
     return std.fmt.allocPrint(allocator, fmt, args) catch |err| {
@@ -115,16 +131,23 @@ pub fn buildSortedImportText(
 
     const nl = detectNewline(source);
 
-    var prev_class: ?u2 = null;
+    // A blank line separates every (class × kind) band: std/third-party/local
+    // plain, then member imports within each class, then the alias band.
+    const Group = struct { alias: bool, class: u2, member: bool };
+    var prev_group: ?Group = null;
     for (all_imports.items, 0..) |imp, idx| {
-        if (idx == sorted_imports.len and sorted_imports.len > 0) {
-            try imports_buf.appendSlice(allocator, nl);
-        } else if (idx < sorted_imports.len and prev_class != null and prev_class.? != imp.class) {
-            try imports_buf.appendSlice(allocator, nl);
+        const group: Group = if (idx >= sorted_imports.len)
+            .{ .alias = true, .class = 0, .member = false }
+        else
+            .{ .alias = false, .class = imp.class, .member = imp.member };
+        if (prev_group) |prev| {
+            if (prev.alias != group.alias or prev.class != group.class or prev.member != group.member) {
+                try imports_buf.appendSlice(allocator, nl);
+            }
         }
-        prev_class = imp.class;
+        prev_group = group;
         if (imp.comment_start) |cs| {
-            try imports_buf.appendSlice(allocator, source[cs..imp.start]);
+            try appendCommentBlock(allocator, &imports_buf, source[cs..imp.start]);
         }
         const text = source[imp.start..imp.end];
         const trimmed_import = std.mem.trim(u8, text, " \t\n\r");
