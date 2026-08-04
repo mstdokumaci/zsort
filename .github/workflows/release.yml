@@ -17,9 +17,16 @@ jobs:
     permissions:
       contents: read
       actions: write
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag }}
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
+      - name: Restrict manual dispatch to maintainers
+        if: github.event_name == 'workflow_dispatch' && github.actor != 'mstdokumaci'
+        run: |
+          echo "::error::manual dispatch is restricted to maintainers" >&2
+          exit 1
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -33,8 +40,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION="${{ github.event.inputs.tag }}"
-            VERSION="${VERSION#v}"
+            VERSION="${RELEASE_TAG#v}"
           fi
           zig build -Doptimize=ReleaseFast
           REPORTED="$(./zig-out/bin/zsort --version | awk '{print $2}')"
