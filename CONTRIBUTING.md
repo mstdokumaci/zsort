@@ -89,8 +89,8 @@ real package dependency.
 
 ## Releasing
 
-1. Bump `.version` in `build.zig.zon` **and** `src/version.zig` — the
-   build-time check in `build.zig` fails if they drift — add a CHANGELOG
+1. Bump `.version` in `build.zig.zon` **and** `version` in `src/version.zig` —
+   the build-time check in `build.zig` fails if they drift — add a CHANGELOG
    entry, update the README example URL, commit, and push.
 2. Tag and push: `git tag v0.3.0 && git push origin v0.3.0`. This triggers
    the `release` workflow (cross-platform binaries) and `bump-tap` (Homebrew
@@ -99,5 +99,5 @@ real package dependency.
    https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz`,
    paste the printed hash into the README, commit, and push.
 4. Verify: the release page has the four `zsort-<target>.tar.gz` binaries,
-   and the Homebrew tap was bumped. Re-running the `release` workflow on an
-   existing tag requires deleting the release first.
+   and the Homebrew tap was bumped. To re-publish, delete the release and run
+   the `release` workflow manually with the tag input.

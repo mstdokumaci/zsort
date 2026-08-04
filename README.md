@@ -44,7 +44,7 @@ like the one below for the version you pin):
     .dependencies = .{
         .zsort = .{
             .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz",
-            // .hash: run `zig fetch --save` to fill in, like the fingerprint above
+            // .hash: fill in via `zig fetch --save https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz` (see CONTRIBUTING.md § Releasing)
             .lazy = true,
         },
     },

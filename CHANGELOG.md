@@ -9,15 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Deterministic sorting: any input order produces the same output
-- CI workflow that publishes cross-platform binaries on every tag
-- Version is defined once (`build.zig.zon`) and enforced at build time
-  (`src/version.zig` is checked against it)
-- CONTRIBUTING.md and AGENTS.md with lint gates and acceptance criteria
+- CI workflow that publishes cross-platform binaries on `v*` tag pushes
+- Version is declared in both `build.zig.zon` and `src/version.zig`, with a
+  build-time consistency check in `build.zig`
+- CONTRIBUTING.md with lint gates, acceptance criteria, and a releasing
+  checklist
 
 ### Changed
 
-- CI lint gates now run on both Zig 0.15.2 and 0.16
-- Homebrew tap is auto-bumped on tag pushes
+- CI zig gates (tests, `check-imports`, fmt, compile) now run on both Zig
+  0.15.2 and 0.16; external linters (zlint, zwanzig) run on 0.15.2
+- Homebrew tap is auto-bumped on `v*` tag pushes
 
 ## [0.2.0] - 2026-08-04
 
