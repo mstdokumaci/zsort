@@ -6,7 +6,7 @@ Lint gates: for both 0.15.2 and 0.16
 - `zig fmt --check src`
 - `zlint --deny-warnings`
 - `zwanzig src build.zig`
-- `cd test/consumer && zig build && zig build check-imports`
+- `cd test/consumer && zig build && zig build fix-imports && zig build check-imports && git checkout -- src` (the fixture is deliberately unsorted; check-imports must fail on a raw checkout)
 
 When a new issue or improvement is represented. We accept them only if:
 - it can be reproduced by a failing test before fixing (test → red → fix → green)
