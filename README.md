@@ -12,7 +12,7 @@ attached comments travel with their imports.
 
 ## Installation
 
-There are two ways to get `zsort`.
+There are multiple ways to get `zsort`.
 
 ### Homebrew
 
