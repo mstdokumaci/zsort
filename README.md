@@ -111,34 +111,46 @@ fixing, errors, or banned imports are found.
 
 ## Ordering rules
 
-`zsort` collects three kinds of top-of-file declarations:
+`zsort` recognizes three kinds of top-of-file declarations:
 
-1. **plain imports** — `const x = @import("path");`
-2. **member imports** — `const X = @import("path").Member;` (the member access is
-   ignored for ordering; the base path is the sort key)
-3. **aliases** — `const X = module.Member;` (a dotted chain without `@import`)
+- **Plain import** — `const x = @import("path");`
+- **Member import** — `const X = @import("path").Member;` (a member access
+  after the import; the base path is what gets sorted)
+- **Alias** — `const X = module.Member;` (a dotted name with no `@import`)
 
-They are emitted in bands, in this order, with a blank line between bands:
+Imports are emitted in this order:
 
-1. **std/builtin** — plain, then member (`std`, `builtin`)
-2. **third-party** — plain, then member (`sqlite`, `httpz`, ...)
-3. **local** — plain, then member (`root`, `build_root`, paths containing `/`,
-   paths ending in `.zig`)
-4. **aliases** — ordered std/builtin → third-party → local, no blank lines
-   inside the band. An alias is keyed by the import path its module name
-   resolves to (`const Connection = connection_state.Connection;` sorts as
-   `connection/state.zig`); unresolvable bases (local structs, unimported
-   names) keep the chain text.
+1. **std/builtin** — `std`, `builtin`
+2. **third-party** — any other module name (`httpz`, `sqlite`, ...)
+3. **local** — `root`, `build_root`, paths containing `/`, and paths ending
+   in `.zig`
+4. **aliases** — keyed by the import path their module name resolves to
+   (`auth` → `auth.zig`); unresolvable names fall back to the dotted text as
+   written
 
-Within a band, imports are sorted by **path**, byte-wise (`a.zig` before
-`aa.zig`), and identical paths tie-break on the full declaration text. Sorting
-never depends on source position: the same set of imports in any order yields
-the same output. `@cImport` blocks are treated as third-party imports and
-moved as a whole.
+Blank lines appear only between classification bands (1–3) and before the
+alias band. Plain and member imports of the same class sit in one band, no
+blank line between them:
+
+```zig
+const std = @import("std");
+
+const httpz = @import("httpz");
+
+const auth = @import("auth.zig");
+const Router = @import("router.zig").Router;
+
+const Config = auth.Config;
+```
+
+Within a band, imports are sorted by path, byte-wise (`a.zig` before
+`aa.zig`); identical paths tie-break on the declaration text. Sorting never
+depends on where a declaration sits in the file — any input order produces
+the same output. `@cImport` blocks count as third-party imports.
 
 ### What `fix` does
 
-- Sorts and groups top-of-file imports into the bands above
+- Sorts and groups top-of-file imports
 - Organizes typed imports (`const x: SomeType = @import(...)`) like plain ones
 - Hoists imports that appear later in the file into their proper group
 - Keeps comments that immediately precede an import attached to it (blank

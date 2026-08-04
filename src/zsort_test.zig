@@ -658,12 +658,41 @@ test "buildSortedImportText: full band order with members and aliases" {
         \\const std = @import("std");
         \\
         \\const bar = @import("bar");
-        \\
         \\const Sqlite = @import("sqlite").Sqlite;
         \\
         \\const Local = @import("local.zig").Local;
         \\
         \\const Debug = std.debug;
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "buildSortedImportText: README example sorts as documented" {
+    const source =
+        \\const std = @import("std");
+        \\const httpz = @import("httpz");
+        \\const auth = @import("auth.zig");
+        \\const Router = @import("router.zig").Router;
+        \\const Config = auth.Config;
+        \\const rest = 1;
+    ;
+    const block_end = blockEndForTest(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    var aliases = try collectAliasesForTest(source);
+    defer aliases.deinit(std.testing.allocator);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    defer std.testing.allocator.free(result);
+    const expected =
+        \\const std = @import("std");
+        \\
+        \\const httpz = @import("httpz");
+        \\
+        \\const auth = @import("auth.zig");
+        \\const Router = @import("router.zig").Router;
+        \\
+        \\const Config = auth.Config;
         \\
     ;
     try std.testing.expectEqualStrings(expected, result);
@@ -847,6 +876,30 @@ test "analyze: unresolvable alias keeps chain text" {
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
     try std.testing.expectEqualStrings("Internal.len", analysis.aliases.items[0].path);
+}
+
+test "analyze: call-result chain is not an alias" {
+    const source = "const Config = factory().Config;\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
+}
+
+test "analyze: index-access chain is not an alias" {
+    const source = "const Config = items[0].Config;\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
+}
+
+test "analyze: alias resolves with tab-separated decl name" {
+    const source = "const\tx = @import(\"a\");\nconst Y = x.Y;\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("a", analysis.aliases.items[0].path);
 }
 
 test "analyze: escaped import path is decoded" {

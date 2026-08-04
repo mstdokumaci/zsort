@@ -131,17 +131,18 @@ pub fn buildSortedImportText(
 
     const nl = detectNewline(source);
 
-    // A blank line separates every (class × kind) band: std/third-party/local
-    // plain, then member imports within each class, then the alias band.
-    const Group = struct { alias: bool, class: u2, member: bool };
+    // A blank line separates classification bands (std/third-party/local)
+    // and the alias band. Plain and member imports of the same class form
+    // one band; `member` stays in the sort key but never triggers a blank.
+    const Group = struct { alias: bool, class: u2 };
     var prev_group: ?Group = null;
     for (all_imports.items, 0..) |imp, idx| {
         const group: Group = if (idx >= sorted_imports.len)
-            .{ .alias = true, .class = 0, .member = false }
+            .{ .alias = true, .class = 0 }
         else
-            .{ .alias = false, .class = imp.class, .member = imp.member };
+            .{ .alias = false, .class = imp.class };
         if (prev_group) |prev| {
-            if (prev.alias != group.alias or prev.class != group.class or prev.member != group.member) {
+            if (prev.alias != group.alias or prev.class != group.class) {
                 try imports_buf.appendSlice(allocator, nl);
             }
         }

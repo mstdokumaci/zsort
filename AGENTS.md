@@ -1,9 +1,13 @@
-Local environment might have zig, zig15, zig16 binaries, verify which one has which version before starting to work.
+Local environment might have zig, zig15, zig16 binaries, verify which one has which version before starting to work (`zig version`).
 
 Lint gates: for both 0.15.2 and 0.16
-- zig build test
-- zig build check-imports
-- zig fmt --check src
-- zlint --deny-warnings
-- zwanzig src build.zig
-- also verify build and check-imports still work for the consumer in test/consumer
+- `zig build test`
+- `zig build check-imports`
+- `zig fmt --check src`
+- `zlint --deny-warnings`
+- `zwanzig src build.zig`
+- `cd test/consumer && zig build && zig build check-imports`
+
+When a new issue or improvement is represented. We accept them only if:
+- it can be reproduced by a failing test before fixing (test → red → fix → green)
+- it will simplify the code without changing the behaviour either by reducing LOC or complexity

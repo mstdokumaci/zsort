@@ -279,23 +279,6 @@ pub fn importCalls(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged(
 }
 
 // zwanzig-disable-next-line: unused-parameter
-/// const name of a decl: after optional `pub`/`export`/`comptime` and `const`,
-/// up to `=`, `:`, or whitespace. `pub const TableDef = ...` → `TableDef`.
-fn declName(text: []const u8) []const u8 {
-    var t = text;
-    while (std.mem.startsWith(u8, t, "pub ") or
-        std.mem.startsWith(u8, t, "export ") or
-        std.mem.startsWith(u8, t, "comptime "))
-    {
-        t = t[std.mem.indexOfScalar(u8, t, ' ').? + 1 ..];
-    }
-    if (!std.mem.startsWith(u8, t, "const ")) return "";
-    t = t["const ".len..];
-    var i: usize = 0;
-    while (i < t.len and (std.ascii.isAlphanumeric(t[i]) or t[i] == '_')) : (i += 1) {}
-    return t[0..i];
-}
-
 // zwanzig-disable-next-line: unused-parameter
 fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]const u8), tree: Ast, source: []const u8, node: Ast.Node.Index, vd: Ast.full.VarDecl) !?Found {
     if (!std.mem.eql(u8, tree.tokenSlice(vd.ast.mut_token), "const")) return null;
@@ -303,7 +286,9 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
     const start = declStart(tree, node);
     const end = spanEnd(tree, source, node);
     const text = source[start..end];
-    const name = declName(text);
+    // The name token always immediately follows `const`; token-based so
+    // whitespace between modifiers and name (tabs, doubled spaces) is moot.
+    const name = tree.tokenSlice(vd.ast.mut_token + 1);
     const comment_start = findCommentStart(source, findLineStart(source, start));
 
     // Base of a dotted chain: `@import("a").Foo` → the `@import` call.
@@ -382,7 +367,8 @@ fn stringPath(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]con
 
 /// Single-line, whitespace-free dotted chain starting with an identifier:
 /// `std.debug`, `a.b.c`. Anything else (spaced dots, multi-line chains,
-/// `@import("a").Foo` — a member import, postfix calls) is not an alias.
+/// `@import("a").Foo` — a member import, postfix calls and index access) is
+/// not an alias.
 fn isAliasChain(tree: Ast, init: Ast.Node.Index) bool {
     const first = tree.firstToken(init);
     const last = tree.lastToken(init);
@@ -390,6 +376,8 @@ fn isAliasChain(tree: Ast, init: Ast.Node.Index) bool {
     if (!tree.tokensOnSameLine(first, last)) return false;
     var t = first;
     while (t < last) : (t += 1) {
+        const tag = tree.tokens.items(.tag)[t];
+        if (tag != .identifier and tag != .period) return false;
         const end = tree.tokens.items(.start)[t] + @as(u32, @intCast(tree.tokenSlice(t).len));
         if (end != tree.tokens.items(.start)[t + 1]) return false;
     }
