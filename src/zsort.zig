@@ -42,19 +42,38 @@ fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytyp
 /// `compat.ansi_*` codes are the only intentional raw escape sequences.
 /// Returns `s` unchanged when clean (no allocation); degrades to `s` on OOM.
 /// ponytail: ESC-only, matching git's quoting of paths; other control bytes have no terminal effect
-fn escapeTerm(allocator: std.mem.Allocator, s: []const u8) []const u8 {
-    const n = std.mem.count(u8, s, "\x1b");
+/// Replace terminal-control bytes with visible `\xNN` forms (ESC, CR, LF,
+/// BEL, backspace), so dynamic text (filenames, diff lines, error strings)
+/// can't inject ANSI escapes or line forgeries into the terminal;
+/// `compat.ansi_*` codes are the only intentional raw escape sequences.
+/// Returns `s` unchanged when clean (no allocation). Propagates
+/// `error.OutOfMemory` rather than ever returning the raw input.
+/// ponytail: the five bytes a terminal interprets; tab/DEL are cosmetic only
+pub fn escapeTerm(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    var n: usize = 0;
+    for (s) |b| {
+        switch (b) {
+            0x1b, 0x0d, 0x0a, 0x07, 0x08 => n += 1,
+            else => {},
+        }
+    }
     if (n == 0) return s;
-    const out = allocator.alloc(u8, s.len + n * 3) catch return s;
+    const out = try allocator.alloc(u8, s.len + n * 3);
     var o: usize = 0;
     for (s) |b| {
-        if (b == 0x1b) {
-            out[o..][0..4].* = "\\x1b".*;
-            o += 4;
-        } else {
-            out[o] = b;
-            o += 1;
+        switch (b) {
+            0x1b => out[o..][0..4].* = "\\x1b".*,
+            0x0d => out[o..][0..4].* = "\\x0d".*,
+            0x0a => out[o..][0..4].* = "\\x0a".*,
+            0x07 => out[o..][0..4].* = "\\x07".*,
+            0x08 => out[o..][0..4].* = "\\x08".*,
+            else => {
+                out[o] = b;
+                o += 1;
+                continue;
+            },
         }
+        o += 4;
     }
     return out;
 }
@@ -268,7 +287,7 @@ pub fn formatUnifiedDiff(
     const dim = compat.ansi(use_color, compat.ansi_dim);
     const reset = compat.ansi(use_color, compat.ansi_reset);
 
-    const esc_path = escapeTerm(allocator, file_path);
+    const esc_path = try escapeTerm(allocator, file_path);
     defer if (esc_path.ptr != file_path.ptr) allocator.free(esc_path);
 
     var buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -289,10 +308,26 @@ pub fn formatUnifiedDiff(
     try w.print("  {s}--- {s}{s}\n", .{ red, esc_path, reset });
     try w.print("  {s}+++ {s}{s}\n", .{ green, esc_path, reset });
     try w.print("  {s}@@ -{d},{d} +{d},{d} @@{s}\n", .{ cyan, p + 1, old_mid.len, p + 1, new_mid.len, reset });
-    for (old_lines.items[p -| 2..p]) |line| try w.print("   {s}\n", .{line});
-    for (old_mid) |line| try w.print("  {s}- {s}{s}\n", .{ red, line, reset });
-    for (new_mid) |line| try w.print("  {s}+ {s}{s}\n", .{ green, line, reset });
-    for (old_lines.items[after_start..after_end]) |line| try w.print("   {s}\n", .{line});
+    for (old_lines.items[p -| 2..p]) |line| {
+        const esc = try escapeTerm(allocator, line);
+        defer if (esc.ptr != line.ptr) allocator.free(esc);
+        try w.print("   {s}\n", .{esc});
+    }
+    for (old_mid) |line| {
+        const esc = try escapeTerm(allocator, line);
+        defer if (esc.ptr != line.ptr) allocator.free(esc);
+        try w.print("  {s}- {s}{s}\n", .{ red, esc, reset });
+    }
+    for (new_mid) |line| {
+        const esc = try escapeTerm(allocator, line);
+        defer if (esc.ptr != line.ptr) allocator.free(esc);
+        try w.print("  {s}+ {s}{s}\n", .{ green, esc, reset });
+    }
+    for (old_lines.items[after_start..after_end]) |line| {
+        const esc = try escapeTerm(allocator, line);
+        defer if (esc.ptr != line.ptr) allocator.free(esc);
+        try w.print("   {s}\n", .{esc});
+    }
     try w.writeByte('\n');
     buf = aw.toArrayList();
     return buf.toOwnedSlice(allocator);
@@ -753,7 +788,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     var err_msg: ?[]const u8 = null;
     var parsed = parseArgs(allocator, args, &err_msg) catch |e| switch (e) {
         error.Usage, error.InvalidMode, error.MissingBanValue, error.UnexpectedArg => {
-            printParseError(io, color_err, escapeTerm(allocator, err_msg orelse "invalid arguments"));
+            printParseError(io, color_err, try escapeTerm(allocator, err_msg orelse "invalid arguments"));
             std.process.exit(1);
         },
         error.OutOfMemory => return error.OutOfMemory,
@@ -773,7 +808,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     defer files.deinit(allocator);
 
     const stat = compat.statFile(io, compat.cwd(), parsed.target) catch |err| {
-        compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, escapeTerm(allocator, parsed.target), @errorName(err), err_reset });
+        compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, try escapeTerm(allocator, parsed.target), @errorName(err), err_reset });
         std.process.exit(1);
     };
 
@@ -785,12 +820,12 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     } else if (stat.kind == .file) {
         try files.append(allocator, parsed.target);
     } else {
-        compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, escapeTerm(allocator, parsed.target), err_reset });
+        compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, try escapeTerm(allocator, parsed.target), err_reset });
         std.process.exit(1);
     }
 
     if (files.items.len == 0) {
-        compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, escapeTerm(allocator, parsed.target), err_reset });
+        compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, try escapeTerm(allocator, parsed.target), err_reset });
         std.process.exit(1);
     }
 
@@ -831,21 +866,21 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         defer allocator.destroy(slot.arena);
         defer slot.arena.deinit();
         const file_path = job.path;
-        const esc_path = escapeTerm(allocator, file_path);
+        const esc_path = try escapeTerm(allocator, file_path);
 
         if (slot.read_err) |msg| {
-            compat.printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, escapeTerm(allocator, msg), err_reset });
+            compat.printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, try escapeTerm(allocator, msg), err_reset });
             error_count += 1;
             continue;
         }
         if (slot.proc_err) |msg| {
-            compat.printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, escapeTerm(allocator, msg), err_reset });
+            compat.printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, try escapeTerm(allocator, msg), err_reset });
             error_count += 1;
             continue;
         }
         const result = slot.result orelse continue;
         if (result.banned_msg) |msg| {
-            compat.printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, esc_path, err_reset, err_magenta, err_reset, escapeTerm(allocator, msg) });
+            compat.printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, esc_path, err_reset, err_magenta, err_reset, try escapeTerm(allocator, msg) });
             banned_count += 1;
         }
         if (!result.changed) continue;

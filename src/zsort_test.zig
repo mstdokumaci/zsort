@@ -588,6 +588,35 @@ test "formatUnifiedDiff: ESC bytes in file_path are escaped, not injected" {
     try std.testing.expect(std.mem.indexOf(u8, diff, "\\x1b[31mEVE\\x1b[0m.zig") != null);
 }
 
+test "formatUnifiedDiff: control bytes in diff body are escaped, not injected" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\x1b[31mB\x07C\x08D\x0dE\n", "x\n", false);
+    defer std.testing.allocator.free(diff);
+    for ([_]u8{ 0x1b, 0x07, 0x08, 0x0d }) |byte| {
+        try std.testing.expect(std.mem.indexOfScalar(u8, diff, byte) == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, diff, "\\x1b[31mB\\x07C\\x08D\\x0dE") != null);
+}
+
+test "formatUnifiedDiff: CR, LF, BEL, BS in file_path are escaped, not injected" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "a\x0db\x0ac\x07d\x08e.zig", "a\n", "b\n", false);
+    defer std.testing.allocator.free(diff);
+    for ([_]u8{ 0x0d, 0x07, 0x08 }) |byte| {
+        try std.testing.expect(std.mem.indexOfScalar(u8, diff, byte) == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, diff, "a\\x0db\\x0ac\\x07d\\x08e.zig") != null);
+}
+
+test "escapeTerm: allocation failure propagates, never returns raw input" {
+    var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, zsort.escapeTerm(fa.allocator(), "\x1b"));
+}
+
+test "escapeTerm: clean input returns unchanged without allocating" {
+    var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    const s = "plain.zig";
+    try std.testing.expectEqualStrings(s, try zsort.escapeTerm(fa.allocator(), s));
+}
+
 test "collectImports: classes and sorted order" {
     const source =
         \\const local = @import("foo.zig");
