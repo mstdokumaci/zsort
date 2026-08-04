@@ -581,6 +581,13 @@ test "formatUnifiedDiff: trailing-newline marker is dimmed when colored" {
     );
 }
 
+test "formatUnifiedDiff: ESC bytes in file_path are escaped, not injected" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "\x1b[31mEVE\x1b[0m.zig", "a\n", "b\n", false);
+    defer std.testing.allocator.free(diff);
+    try std.testing.expect(std.mem.indexOfScalar(u8, diff, 0x1b) == null);
+    try std.testing.expect(std.mem.indexOf(u8, diff, "\\x1b[31mEVE\\x1b[0m.zig") != null);
+}
+
 test "collectImports: classes and sorted order" {
     const source =
         \\const local = @import("foo.zig");

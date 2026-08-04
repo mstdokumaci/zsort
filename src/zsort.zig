@@ -37,6 +37,28 @@ fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytyp
     };
 }
 
+/// Replace ESC bytes (0x1b) with the visible `\x1b`, so dynamic text
+/// (filenames, error strings) can't inject ANSI escapes into the terminal;
+/// `compat.ansi_*` codes are the only intentional raw escape sequences.
+/// Returns `s` unchanged when clean (no allocation); degrades to `s` on OOM.
+/// ponytail: ESC-only, matching git's quoting of paths; other control bytes have no terminal effect
+fn escapeTerm(allocator: std.mem.Allocator, s: []const u8) []const u8 {
+    const n = std.mem.count(u8, s, "\x1b");
+    if (n == 0) return s;
+    const out = allocator.alloc(u8, s.len + n * 3) catch return s;
+    var o: usize = 0;
+    for (s) |b| {
+        if (b == 0x1b) {
+            out[o..][0..4].* = "\\x1b".*;
+            o += 4;
+        } else {
+            out[o] = b;
+            o += 1;
+        }
+    }
+    return out;
+}
+
 fn scanBannedPatterns(
     allocator: std.mem.Allocator,
     analysis: *const ast_scan.Analysis,
@@ -246,6 +268,9 @@ pub fn formatUnifiedDiff(
     const dim = compat.ansi(use_color, compat.ansi_dim);
     const reset = compat.ansi(use_color, compat.ansi_reset);
 
+    const esc_path = escapeTerm(allocator, file_path);
+    defer if (esc_path.ptr != file_path.ptr) allocator.free(esc_path);
+
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
     var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, &buf);
@@ -253,16 +278,16 @@ pub fn formatUnifiedDiff(
     const w = &aw.writer;
 
     if (old_mid.len == 0 and new_mid.len == 0) {
-        try w.print("  {s}--- {s}{s}\n", .{ red, file_path, reset });
-        try w.print("  {s}+++ {s}{s}\n", .{ green, file_path, reset });
+        try w.print("  {s}--- {s}{s}\n", .{ red, esc_path, reset });
+        try w.print("  {s}+++ {s}{s}\n", .{ green, esc_path, reset });
         try w.print("  {s}(trailing newline only){s}\n", .{ dim, reset });
         try w.writeByte('\n');
         buf = aw.toArrayList();
         return buf.toOwnedSlice(allocator);
     }
 
-    try w.print("  {s}--- {s}{s}\n", .{ red, file_path, reset });
-    try w.print("  {s}+++ {s}{s}\n", .{ green, file_path, reset });
+    try w.print("  {s}--- {s}{s}\n", .{ red, esc_path, reset });
+    try w.print("  {s}+++ {s}{s}\n", .{ green, esc_path, reset });
     try w.print("  {s}@@ -{d},{d} +{d},{d} @@{s}\n", .{ cyan, p + 1, old_mid.len, p + 1, new_mid.len, reset });
     for (old_lines.items[p -| 2..p]) |line| try w.print("   {s}\n", .{line});
     for (old_mid) |line| try w.print("  {s}- {s}{s}\n", .{ red, line, reset });
@@ -728,7 +753,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     var err_msg: ?[]const u8 = null;
     var parsed = parseArgs(allocator, args, &err_msg) catch |e| switch (e) {
         error.Usage, error.InvalidMode, error.MissingBanValue, error.UnexpectedArg => {
-            printParseError(io, color_err, err_msg orelse "invalid arguments");
+            printParseError(io, color_err, escapeTerm(allocator, err_msg orelse "invalid arguments"));
             std.process.exit(1);
         },
         error.OutOfMemory => return error.OutOfMemory,
@@ -748,7 +773,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     defer files.deinit(allocator);
 
     const stat = compat.statFile(io, compat.cwd(), parsed.target) catch |err| {
-        compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, parsed.target, @errorName(err), err_reset });
+        compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, escapeTerm(allocator, parsed.target), @errorName(err), err_reset });
         std.process.exit(1);
     };
 
@@ -760,12 +785,12 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     } else if (stat.kind == .file) {
         try files.append(allocator, parsed.target);
     } else {
-        compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, parsed.target, err_reset });
+        compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, escapeTerm(allocator, parsed.target), err_reset });
         std.process.exit(1);
     }
 
     if (files.items.len == 0) {
-        compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, parsed.target, err_reset });
+        compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, escapeTerm(allocator, parsed.target), err_reset });
         std.process.exit(1);
     }
 
@@ -806,20 +831,21 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         defer allocator.destroy(slot.arena);
         defer slot.arena.deinit();
         const file_path = job.path;
+        const esc_path = escapeTerm(allocator, file_path);
 
         if (slot.read_err) |msg| {
-            compat.printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, file_path, err_reset, err_red, msg, err_reset });
+            compat.printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, escapeTerm(allocator, msg), err_reset });
             error_count += 1;
             continue;
         }
         if (slot.proc_err) |msg| {
-            compat.printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, file_path, err_reset, err_red, msg, err_reset });
+            compat.printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, escapeTerm(allocator, msg), err_reset });
             error_count += 1;
             continue;
         }
         const result = slot.result orelse continue;
         if (result.banned_msg) |msg| {
-            compat.printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, file_path, err_reset, err_magenta, err_reset, msg });
+            compat.printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, esc_path, err_reset, err_magenta, err_reset, escapeTerm(allocator, msg) });
             banned_count += 1;
         }
         if (!result.changed) continue;
@@ -829,12 +855,12 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         if (parsed.mode == .fix) {
             fixFile: {
                 compat.atomicWrite(io, compat.cwd(), file_path, result.new_text) catch |err| {
-                    compat.printStderr(io, "  {s}Error writing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, file_path, err_reset, err_red, @errorName(err), err_reset });
+                    compat.printStderr(io, "  {s}Error writing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, @errorName(err), err_reset });
                     error_count += 1;
                     break :fixFile;
                 };
                 fixed_count += 1;
-                compat.printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, file_path, out_reset });
+                compat.printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, esc_path, out_reset });
             }
         } else {
             if (result.stray_count > 0) {
