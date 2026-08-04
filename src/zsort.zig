@@ -867,20 +867,27 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         defer slot.arena.deinit();
         const file_path = job.path;
         const esc_path = try escapeTerm(allocator, file_path);
+        defer if (esc_path.ptr != file_path.ptr) allocator.free(esc_path);
 
         if (slot.read_err) |msg| {
-            compat.printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, try escapeTerm(allocator, msg), err_reset });
+            const esc_msg = try escapeTerm(allocator, msg);
+            defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
+            compat.printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, esc_msg, err_reset });
             error_count += 1;
             continue;
         }
         if (slot.proc_err) |msg| {
-            compat.printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, try escapeTerm(allocator, msg), err_reset });
+            const esc_msg = try escapeTerm(allocator, msg);
+            defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
+            compat.printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, esc_msg, err_reset });
             error_count += 1;
             continue;
         }
         const result = slot.result orelse continue;
         if (result.banned_msg) |msg| {
-            compat.printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, esc_path, err_reset, err_magenta, err_reset, try escapeTerm(allocator, msg) });
+            const esc_msg = try escapeTerm(allocator, msg);
+            defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
+            compat.printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, esc_path, err_reset, err_magenta, err_reset, esc_msg });
             banned_count += 1;
         }
         if (!result.changed) continue;
