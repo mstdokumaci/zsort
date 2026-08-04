@@ -638,6 +638,97 @@ test "buildSortedImportText: alias imports hoisted after imports" {
     try std.testing.expect(bar_pos < debug_pos);
 }
 
+test "buildSortedImportText: full band order with members and aliases" {
+    const source =
+        \\const std = @import("std");
+        \\const Sqlite = @import("sqlite").Sqlite;
+        \\const bar = @import("bar");
+        \\const Local = @import("local.zig").Local;
+        \\const Debug = std.debug;
+        \\const rest = 1;
+    ;
+    const block_end = blockEndForTest(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    var aliases = try collectAliasesForTest(source);
+    defer aliases.deinit(std.testing.allocator);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    defer std.testing.allocator.free(result);
+    const expected =
+        \\const std = @import("std");
+        \\
+        \\const bar = @import("bar");
+        \\const Sqlite = @import("sqlite").Sqlite;
+        \\
+        \\const Local = @import("local.zig").Local;
+        \\
+        \\const Debug = std.debug;
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "buildSortedImportText: README example sorts as documented" {
+    const source =
+        \\const std = @import("std");
+        \\const httpz = @import("httpz");
+        \\const auth = @import("auth.zig");
+        \\const Router = @import("router.zig").Router;
+        \\const Config = auth.Config;
+        \\const rest = 1;
+    ;
+    const block_end = blockEndForTest(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    var aliases = try collectAliasesForTest(source);
+    defer aliases.deinit(std.testing.allocator);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    defer std.testing.allocator.free(result);
+    const expected =
+        \\const std = @import("std");
+        \\
+        \\const httpz = @import("httpz");
+        \\
+        \\const auth = @import("auth.zig");
+        \\const Router = @import("router.zig").Router;
+        \\
+        \\const Config = auth.Config;
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
+test "buildSortedImportText: aliases sorted by resolved path" {
+    const source =
+        \\const connection_state = @import("connection/state.zig");
+        \\const connection_manager = @import("connection/manager.zig");
+        \\const std = @import("std");
+        \\const Allocator = std.mem.Allocator;
+        \\const Connection = connection_state.Connection;
+        \\const ConnectionManager = connection_manager.ConnectionManager;
+        \\const rest = 1;
+    ;
+    const block_end = blockEndForTest(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    var aliases = try collectAliasesForTest(source);
+    defer aliases.deinit(std.testing.allocator);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    defer std.testing.allocator.free(result);
+    const expected =
+        \\const std = @import("std");
+        \\
+        \\const connection_manager = @import("connection/manager.zig");
+        \\const connection_state = @import("connection/state.zig");
+        \\
+        \\const Allocator = std.mem.Allocator;
+        \\const ConnectionManager = connection_manager.ConnectionManager;
+        \\const Connection = connection_state.Connection;
+        \\
+    ;
+    try std.testing.expectEqualStrings(expected, result);
+}
+
 test "processSource: hoisted stray import lands in its group" {
     const source =
         \\const bar = @import("bar");
@@ -659,12 +750,156 @@ test "processSource: hoisted stray import lands in its group" {
     try std.testing.expect(std.mem.indexOf(u8, result.new_text, "pub fn main") != null);
 }
 
+test "processSource: output independent of input order" {
+    const forward =
+        \\const std = @import("std");
+        \\const MessageHandler = @import("message_handler.zig").MessageHandler;
+        \\const bar = @import("bar");
+        \\const connection_state = @import("connection/state.zig");
+        \\
+        \\const Connection = connection_state.Connection;
+        \\const A = @import("x");
+        \\const B = @import("x");
+        \\
+        \\pub fn main() {}
+    ;
+    const backward =
+        \\const B = @import("x");
+        \\const A = @import("x");
+        \\const Connection = connection_state.Connection;
+        \\
+        \\const connection_state = @import("connection/state.zig");
+        \\const bar = @import("bar");
+        \\const MessageHandler = @import("message_handler.zig").MessageHandler;
+        \\const std = @import("std");
+        \\
+        \\pub fn main() {}
+    ;
+    const r1 = try zsort.processSource(std.testing.allocator, forward, &.{});
+    defer std.testing.allocator.free(r1.new_text);
+    defer std.testing.allocator.free(r1.new_block);
+    const r2 = try zsort.processSource(std.testing.allocator, backward, &.{});
+    defer std.testing.allocator.free(r2.new_text);
+    defer std.testing.allocator.free(r2.new_block);
+    try std.testing.expectEqualStrings(r1.new_text, r2.new_text);
+}
+
+test "processSource: stray member import hoisted into member band" {
+    const source =
+        \\const bar = @import("bar");
+        \\
+        \\pub fn main() !void {}
+        \\
+        \\const Thing = @import("thing.zig").Thing;
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    const bar_pos = std.mem.indexOf(u8, result.new_text, "const bar") orelse return error.TestUnexpectedResult;
+    const thing_pos = std.mem.indexOf(u8, result.new_text, "const Thing") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(bar_pos < thing_pos);
+    try std.testing.expect(std.mem.indexOf(u8, result.new_text, "pub fn main") != null);
+}
+
 test "analyze: typed import is collected" {
     const source = "const x: SomeType = @import(\"a\");\n";
     var analysis = try zsort.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.imports.items.len);
     try std.testing.expectEqualStrings("a", analysis.imports.items[0].path);
+}
+
+test "analyze: member import collected with base path" {
+    const source =
+        \\const Foo = @import("a/b.zig").Foo;
+        \\const Sqlite = @import("sqlite").Sqlite;
+    ;
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), analysis.imports.items.len);
+    try std.testing.expect(analysis.imports.items[0].member);
+    try std.testing.expectEqualStrings("sqlite", analysis.imports.items[0].path);
+    try std.testing.expectEqual(zsort.class_third_party, analysis.imports.items[0].class);
+    try std.testing.expect(analysis.imports.items[1].member);
+    try std.testing.expectEqualStrings("a/b.zig", analysis.imports.items[1].path);
+    try std.testing.expectEqual(zsort.class_local, analysis.imports.items[1].class);
+}
+
+test "analyze: chained member import path is base" {
+    const source = "const Foo = @import(\"a.zig\").Foo.Bar;\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.imports.items.len);
+    try std.testing.expect(analysis.imports.items[0].member);
+    try std.testing.expectEqualStrings("a.zig", analysis.imports.items[0].path);
+}
+
+test "analyze: alias resolves to import path" {
+    const source =
+        \\const connection_state = @import("connection/state.zig");
+        \\const Connection = connection_state.Connection;
+    ;
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("connection/state.zig", analysis.aliases.items[0].path);
+    try std.testing.expectEqual(zsort.class_local, analysis.aliases.items[0].class);
+}
+
+test "analyze: alias to std resolves to std" {
+    const source =
+        \\const std = @import("std");
+        \\const Debug = std.debug;
+    ;
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("std", analysis.aliases.items[0].path);
+    try std.testing.expectEqual(zsort.class_std_builtin, analysis.aliases.items[0].class);
+}
+
+test "analyze: alias to member import resolves" {
+    const source =
+        \\const MessageHandler = @import("message_handler.zig").MessageHandler;
+        \\const Config = MessageHandler.Config;
+    ;
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("message_handler.zig", analysis.aliases.items[0].path);
+}
+
+test "analyze: unresolvable alias keeps chain text" {
+    const source = "const Len = Internal.len;\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("Internal.len", analysis.aliases.items[0].path);
+}
+
+test "analyze: call-result chain is not an alias" {
+    const source = "const Config = factory().Config;\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
+}
+
+test "analyze: index-access chain is not an alias" {
+    const source = "const Config = items[0].Config;\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
+}
+
+test "analyze: alias resolves with tab-separated decl name" {
+    const source = "const\tx = @import(\"a\");\nconst Y = x.Y;\n";
+    var analysis = try zsort.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("a", analysis.aliases.items[0].path);
 }
 
 test "analyze: escaped import path is decoded" {

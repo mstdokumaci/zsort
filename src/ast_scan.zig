@@ -17,16 +17,23 @@ pub const Import = struct {
     class: u2,
     stray: bool = false,
     comment_start: ?usize = null,
+    /// const name of the decl (`connection_state`); aliases resolve against
+    /// these names to find their module's import path.
+    name: []const u8 = "",
+    /// True for `@import("p").Foo` chains: sorted after plain imports within
+    /// the same class, keyed by the base path `p`.
+    member: bool = false,
+    /// Full decl text (`source[start..end]`); final sort tiebreak so the
+    /// output never depends on input order.
+    text: []const u8 = "",
 
     fn lessThan(ctx: void, a: Import, b: Import) bool {
         _ = ctx;
         if (a.class != b.class) return a.class < b.class;
+        if (a.member != b.member) return !a.member;
         const cmp = std.mem.order(u8, a.path, b.path);
         if (cmp != .eq) return cmp == .lt;
-        const a_len = a.end - a.start;
-        const b_len = b.end - b.start;
-        if (a_len != b_len) return a_len < b_len;
-        return a.start < b.start;
+        return std.mem.order(u8, a.text, b.text) == .lt;
     }
 };
 
@@ -139,6 +146,22 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
     result.calls = try importCalls(allocator, &result.owned_paths, tree);
     result.allowed = try collectAllowedOffsets(allocator, tree);
 
+    // Aliases reference imports by their const name; resolve that name to
+    // the imported path so the alias band sorts by module, not by local
+    // alias. Unresolvable bases (local structs, unimported names) keep the
+    // chain text. Duplicate const names (broken file): first match wins.
+    for (result.aliases.items) |*alias| {
+        const dot = std.mem.indexOfScalar(u8, alias.path, '.') orelse continue;
+        const base = alias.path[0..dot];
+        for (result.imports.items) |imp| {
+            if (std.mem.eql(u8, imp.name, base)) {
+                alias.path = imp.path;
+                alias.class = classify(imp.path);
+                break;
+            }
+        }
+    }
+
     // Aliases outside the block are left alone (never hoisted).
     var j: usize = 0;
     while (j < result.aliases.items.len) {
@@ -151,6 +174,7 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
 
     for (result.imports.items) |*imp| imp.stray = imp.start >= result.block_end;
     std.sort.pdq(Import, result.imports.items, {}, Import.lessThan);
+    std.sort.pdq(Import, result.aliases.items, {}, Import.lessThan);
     return result;
 }
 
@@ -255,41 +279,61 @@ pub fn importCalls(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged(
 }
 
 // zwanzig-disable-next-line: unused-parameter
+// zwanzig-disable-next-line: unused-parameter
 fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]const u8), tree: Ast, source: []const u8, node: Ast.Node.Index, vd: Ast.full.VarDecl) !?Found {
     if (!std.mem.eql(u8, tree.tokenSlice(vd.ast.mut_token), "const")) return null;
     const init = vd.ast.init_node.unwrap() orelse return null;
-    const init_slice = tree.tokenSlice(tree.firstToken(init));
     const start = declStart(tree, node);
+    const end = spanEnd(tree, source, node);
+    const text = source[start..end];
+    // The name token always immediately follows `const`; token-based so
+    // whitespace between modifiers and name (tabs, doubled spaces) is moot.
+    const name = tree.tokenSlice(vd.ast.mut_token + 1);
+    const comment_start = findCommentStart(source, findLineStart(source, start));
 
-    if (std.mem.eql(u8, init_slice, "@import") or std.mem.eql(u8, init_slice, "@cImport")) {
-        const is_cimport = std.mem.eql(u8, init_slice, "@cImport");
+    // Base of a dotted chain: `@import("a").Foo` → the `@import` call.
+    var base = init;
+    var member = false;
+    while (tree.nodeTag(base) == .field_access) {
+        base = tree.nodeData(base).node_and_token[0];
+        member = true;
+    }
+
+    const base_slice = tree.tokenSlice(tree.firstToken(base));
+    if (std.mem.eql(u8, base_slice, "@import") or std.mem.eql(u8, base_slice, "@cImport")) {
+        const is_cimport = std.mem.eql(u8, base_slice, "@cImport");
         const path, const cls = if (is_cimport)
             .{ "<cimport>", class_third_party }
         else blk: {
-            const arg = builtinArg(tree, init) orelse return null;
+            const arg = builtinArg(tree, base) orelse return null;
             const p = (try stringPath(allocator, owned, tree, arg)) orelse return null;
             break :blk .{ p, classify(p) };
         };
         return .{ .imp = .{
             .start = start,
-            .end = spanEnd(tree, source, node),
+            .end = end,
             .path = path,
             .class = cls,
-            .comment_start = findCommentStart(source, findLineStart(source, start)),
+            .comment_start = comment_start,
+            .name = name,
+            .member = member,
+            .text = text,
         }, .alias = false };
     }
 
-    if (tree.nodeTag(init) == .field_access and isAliasChain(tree, init)) {
+    if (member and isAliasChain(tree, init)) {
         const first = tree.firstToken(init);
         const last = tree.lastToken(init);
-        const path = source[tree.tokens.items(.start)[first] .. tree.tokens.items(.start)[last] + @as(u32, @intCast(tree.tokenSlice(last).len))];
-        const dot = std.mem.indexOfScalar(u8, path, '.') orelse return null;
+        const chain = source[tree.tokens.items(.start)[first] .. tree.tokens.items(.start)[last] + @as(u32, @intCast(tree.tokenSlice(last).len))];
+        const dot = std.mem.indexOfScalar(u8, chain, '.') orelse return null;
         return .{ .imp = .{
             .start = start,
-            .end = spanEnd(tree, source, node),
-            .path = path,
-            .class = classify(path[0..dot]),
-            .comment_start = findCommentStart(source, findLineStart(source, start)),
+            .end = end,
+            .path = chain,
+            .class = classify(chain[0..dot]),
+            .comment_start = comment_start,
+            .name = name,
+            .text = text,
         }, .alias = true };
     }
 
@@ -323,8 +367,8 @@ fn stringPath(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]con
 
 /// Single-line, whitespace-free dotted chain starting with an identifier:
 /// `std.debug`, `a.b.c`. Anything else (spaced dots, multi-line chains,
-/// `@import("a").Foo`, postfix calls) stops the block, like the old
-/// alphanumeric-dot line check did.
+/// `@import("a").Foo` — a member import, postfix calls and index access) is
+/// not an alias.
 fn isAliasChain(tree: Ast, init: Ast.Node.Index) bool {
     const first = tree.firstToken(init);
     const last = tree.lastToken(init);
@@ -332,6 +376,8 @@ fn isAliasChain(tree: Ast, init: Ast.Node.Index) bool {
     if (!tree.tokensOnSameLine(first, last)) return false;
     var t = first;
     while (t < last) : (t += 1) {
+        const tag = tree.tokens.items(.tag)[t];
+        if (tag != .identifier and tag != .period) return false;
         const end = tree.tokens.items(.start)[t] + @as(u32, @intCast(tree.tokenSlice(t).len));
         if (end != tree.tokens.items(.start)[t + 1]) return false;
     }
