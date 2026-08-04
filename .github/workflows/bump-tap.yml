@@ -1,0 +1,30 @@
+name: bump-tap
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Homebrew/actions/setup-homebrew@master
+      - name: Update tap formula and push
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          brew update
+          brew tap mstdokumaci/homebrew-zsort
+          cd "$(brew --repo mstdokumaci/homebrew-zsort)"
+          brew bump-formula-pr --write-only --no-audit --no-style \
+            --url "https://github.com/mstdokumaci/zsort/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" \
+            mstdokumaci/zsort/zsort
+          git add -A
+          git commit -m "zsort ${GITHUB_REF_NAME}"
+          git push "https://x-access-token:${TAP_TOKEN}@github.com/mstdokumaci/homebrew-zsort.git" HEAD:main
