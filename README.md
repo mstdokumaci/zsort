@@ -33,22 +33,27 @@ Linux and macOS binaries are attached to each
 
 ### As a Zig package
 
-Add zsort to your `build.zig.zon` (run `zig fetch --save` to fill in a hash
-like the one below for the version you pin):
+Run:
+
+```sh
+zig fetch --save https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz
+```
+
+To add zsort to your `build.zig.zon`:
 
 ```zig
 .{
     .name = .my_project,
-    .version = "0.0.0",
-    .fingerprint = 0x123456789abcdef0, // placeholder: the first `zig build` rejects it and prints the canonical fingerprint to paste in
+    // .version
+    // .fingerprint
     .dependencies = .{
         .zsort = .{
             .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz",
-            // .hash: fill in via `zig fetch --save https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz` (see CONTRIBUTING.md § Releasing)
+            // .hash
             .lazy = true,
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src" },
+    // .paths = .{ "build.zig", "build.zig.zon", ... },
 }
 ```
 
