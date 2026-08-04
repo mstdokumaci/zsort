@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-04
+
+### Changed
+
+- CLI output overhaul: git-style colored diffs, semantic colors for
+  per-file events and the summary, and uniformly indented messages when
+  running on a terminal (plain output when piped)
+- Summary wording is now `Found/Fixed N of M files to fix, N failed, N
+  banned in Nms.`; parse errors print the reason before the usage block
+  instead of duplicating it
+- Help text clarifies `fix` and `--ban-prefix`; usage hint on errors now
+  matches `--help`
+- Platform support: Windows is explicitly not supported; WSL2 is the
+  recommended way to run zsort on Windows
+
 ## [0.3.0] - 2026-08-04
 
 ### Added

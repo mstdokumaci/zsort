@@ -83,6 +83,21 @@ pub fn writeFile(io: Io, dir: Dir, sub_path: []const u8, data: []const u8) !void
     return dir.writeFile(.{ .sub_path = sub_path, .data = data });
 }
 
+pub const ansi_reset = "\x1b[0m";
+pub const ansi_red = "\x1b[31m";
+pub const ansi_green = "\x1b[32m";
+pub const ansi_yellow = "\x1b[33m";
+pub const ansi_magenta = "\x1b[35m";
+pub const ansi_cyan = "\x1b[36m";
+pub const ansi_bold = "\x1b[1m";
+pub const ansi_dim = "\x1b[2m";
+
+/// Returns `code` when color is enabled, else an empty slice, so call sites
+/// can build plain and colored strings from the same format string.
+pub fn ansi(enable: bool, code: []const u8) []const u8 {
+    return if (enable) code else "";
+}
+
 pub const Timer = if (is_v016) struct {
     io: std.Io,
     started: std.Io.Timestamp,
@@ -142,11 +157,32 @@ pub fn writeStdout(io: Io, bytes: []const u8) void {
     }
 }
 
+pub fn printStderr(io: Io, comptime fmt: []const u8, args: anytype) void {
+    if (is_v016) {
+        var obuf: [4096]u8 = undefined;
+        var w = std.Io.File.stderr().writer(io, &obuf);
+        w.interface.print(fmt, args) catch return;
+        w.flush() catch return;
+    } else {
+        var obuf: [4096]u8 = undefined;
+        var w = std.fs.File.stderr().writer(&obuf);
+        w.interface.print(fmt, args) catch return;
+        w.interface.flush() catch return;
+    }
+}
+
 pub fn isTty(io: Io) bool {
     if (is_v016) {
         return std.Io.File.isTty(std.Io.File.stdout(), io) catch return false;
     }
     return std.posix.isatty(std.fs.File.stdout().handle);
+}
+
+pub fn isStderrTty(io: Io) bool {
+    if (is_v016) {
+        return std.Io.File.isTty(std.Io.File.stderr(), io) catch return false;
+    }
+    return std.posix.isatty(std.fs.File.stderr().handle);
 }
 
 /// Spawn `function` over `jobs` and wait for all of them. `function` must be

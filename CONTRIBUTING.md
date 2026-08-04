@@ -42,7 +42,6 @@ verify each download against its trusted SHA-256 before use:
 # zwanzig v0.14.0 — pick the asset for your platform, then verify:
 #   linux-x86_64:  sha256 4667f5f0635b27362a4c9340aa971318f71e5aee778bd5302e88c008e5ce368d
 #   macos-aarch64: sha256 ab2059d3da4e01b716b7888c4642da3b96e1160e9c7f1bf9dbfa5085669c3d0b
-#   windows-x86_64: sha256 2b7fd8e3a027f3f7a9a4e1519a6cca66ce4f01ba214c0a854bc0ccb09d5c320d
 curl -fsSL -o /tmp/zwanzig.tar.gz \
   "https://github.com/forketyfork/zwanzig/releases/download/v0.14.0/zwanzig-v0.14.0-macos-aarch64.tar.gz"
 echo "ab2059d3da4e01b716b7888c4642da3b96e1160e9c7f1bf9dbfa5085669c3d0b  /tmp/zwanzig.tar.gz" | shasum -a 256 -c -
@@ -53,8 +52,8 @@ sudo mv /tmp/zwanzig/zwanzig /usr/local/bin/zwanzig
 zwanzig src build.zig
 ```
 
-The zwanzig commands above are POSIX-only; on Windows, verify the zip with its
-sha256 and place the extracted `zwanzig.exe` on your PATH.
+The zwanzig commands above are POSIX-only. Windows is not supported; see the
+README for running zsort under WSL2.
 
 ```sh
 # zlint v0.9.1 — pick the asset for your platform, then verify:
