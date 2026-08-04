@@ -3,6 +3,10 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to bump the tap to (e.g. v0.3.0)'
+        required: true
 
 permissions:
   contents: read
@@ -10,6 +14,8 @@ permissions:
 jobs:
   bump:
     runs-on: ubuntu-latest
+    env:
+      BUMP_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: Homebrew/actions/setup-homebrew@master
@@ -22,9 +28,9 @@ jobs:
           brew update
           brew tap mstdokumaci/homebrew-zsort
           cd "$(brew --repo mstdokumaci/homebrew-zsort)"
-          brew bump-formula-pr --write-only --no-audit --no-style \
-            --url "https://github.com/mstdokumaci/zsort/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" \
+          brew bump-formula-pr --write-only --no-audit \
+            --url "https://github.com/mstdokumaci/zsort/archive/refs/tags/${BUMP_TAG}.tar.gz" \
             mstdokumaci/zsort/zsort
           git add -A
-          git commit -m "zsort ${GITHUB_REF_NAME}"
+          git commit -m "zsort ${BUMP_TAG}"
           git push "https://x-access-token:${TAP_TOKEN}@github.com/mstdokumaci/homebrew-zsort.git" HEAD:main
