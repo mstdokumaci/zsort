@@ -254,6 +254,7 @@ pub fn importCalls(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged(
     return calls;
 }
 
+// zwanzig-disable-next-line: unused-parameter
 fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]const u8), tree: Ast, source: []const u8, node: Ast.Node.Index, vd: Ast.full.VarDecl) !?Found {
     if (!std.mem.eql(u8, tree.tokenSlice(vd.ast.mut_token), "const")) return null;
     const init = vd.ast.init_node.unwrap() orelse return null;
