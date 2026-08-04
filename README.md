@@ -195,7 +195,7 @@ paths, along with `.git`, `.zig-cache`, `zig-cache`, and `zig-out`.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, lint gates,
-and contribution guidelines.
+and contribution guidelines. Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
