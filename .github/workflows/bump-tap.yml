@@ -23,6 +23,10 @@ jobs:
         env:
           TAP_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
         run: |
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "::error::TAP_PUSH_TOKEN secret is not set in mstdokumaci/zsort → Settings → Secrets and variables → Actions" >&2
+            exit 1
+          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           brew update
