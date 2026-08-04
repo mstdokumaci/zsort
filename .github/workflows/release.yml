@@ -1,0 +1,88 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.3.0); must match the version reported by `zsort --version`'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag }}
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Restrict manual dispatch to maintainers
+        if: github.event_name == 'workflow_dispatch' && github.actor != 'mstdokumaci'
+        run: |
+          echo "::error::manual dispatch is restricted to maintainers" >&2
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Resolve and validate the release version
+        id: resolve
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${RELEASE_TAG#v}"
+          fi
+          zig build -Doptimize=ReleaseFast
+          REPORTED="$(./zig-out/bin/zsort --version | awk '{print $2}')"
+          if [[ "$VERSION" != "$REPORTED" ]]; then
+            echo "::error::tag $VERSION does not match the binary version $REPORTED; bump build.zig.zon and src/version.zig first" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Build and package cross-target binaries
+        run: |
+          set -euo pipefail
+          for target in x86_64-linux aarch64-linux x86_64-macos aarch64-macos; do
+            zig build -Doptimize=ReleaseFast -Dtarget="$target"
+            tar -C zig-out/bin -czf "zsort-$target.tar.gz" zsort
+            rm -rf zig-out
+          done
+      - name: Smoke test the linux binary
+        run: |
+          set -euo pipefail
+          zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux
+          ./zig-out/bin/zsort --version
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: zsort-binaries
+          path: zsort-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zsort-binaries
+          path: binaries
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          files: binaries/zsort-*.tar.gz
+          generate_release_notes: true

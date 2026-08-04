@@ -86,3 +86,18 @@ CI runs the same gates on every PR (lint chain plus the test matrix across
 is the best way to avoid a failing run. Please keep the `test/consumer/`
 fixture project in sync when behavior changes — it exercises zsort as a
 real package dependency.
+
+## Releasing
+
+1. Bump `.version` in `build.zig.zon` **and** `version` in `src/version.zig` —
+   the build-time check in `build.zig` fails if they drift — add a CHANGELOG
+   entry, update the README example URL, commit, and push.
+2. Tag and push: `git tag v0.3.0 && git push origin v0.3.0`. This triggers
+   the `release` workflow (cross-platform binaries) and `bump-tap` (Homebrew
+   formula bump).
+3. Fill in the README example hash: run `zig fetch
+   https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz`,
+   paste the printed hash into the README, commit, and push.
+4. Verify: the release page has the four `zsort-<target>.tar.gz` binaries,
+   and the Homebrew tap was bumped. To re-publish, delete the release and run
+   the `release` workflow manually with the tag input.

@@ -24,6 +24,13 @@ brew install mstdokumaci/zsort/zsort
 This installs a `zsort` binary built from source with the Homebrew-provided
 Zig. No cask or prebuilt bottles involved.
 
+### Prebuilt binaries
+
+Linux and macOS binaries are attached to each
+[GitHub Release](https://github.com/mstdokumaci/zsort/releases). Download
+`zsort-<target>.tar.gz` (e.g. `zsort-x86_64-linux.tar.gz`), unpack it, and put
+`zsort` on your `PATH`.
+
 ### As a Zig package
 
 Add zsort to your `build.zig.zon` (run `zig fetch --save` to fill in a hash
@@ -36,8 +43,8 @@ like the one below for the version you pin):
     .fingerprint = 0x123456789abcdef0, // placeholder: the first `zig build` rejects it and prints the canonical fingerprint to paste in
     .dependencies = .{
         .zsort = .{
-            .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.1.0.tar.gz",
-            .hash = "zsort-0.1.0-D-hm6cRzAQBLca9mEL98ShoTMXxwh_3M_mv_4n6uDpYM",
+            .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz",
+            // .hash: fill in via `zig fetch --save https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz` (see CONTRIBUTING.md § Releasing)
             .lazy = true,
         },
     },
@@ -130,13 +137,25 @@ Imports are emitted in this order:
 
 Blank lines appear only between classification bands (1–3) and before the
 alias band. Plain and member imports of the same class sit in one band, no
-blank line between them:
+blank line between them. Before `zsort fix`:
+
+```zig
+const std = @import("std");
+const Config = auth.Config;
+const Router = @import("router.zig").Router;
+const httpz = @import("httpz");
+// Handles request authentication.
+const auth = @import("auth.zig");
+```
+
+After:
 
 ```zig
 const std = @import("std");
 
 const httpz = @import("httpz");
 
+// Handles request authentication.
 const auth = @import("auth.zig");
 const Router = @import("router.zig").Router;
 
@@ -176,7 +195,7 @@ paths, along with `.git`, `.zig-cache`, `zig-cache`, and `zig-out`.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, lint gates,
-and contribution guidelines.
+and contribution guidelines. Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

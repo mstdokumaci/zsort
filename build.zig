@@ -1,5 +1,13 @@
 const std = @import("std");
 
+const zon = @import("build.zig.zon");
+const src_version = @import("src/version.zig").version;
+comptime {
+    if (!std.mem.eql(u8, zon.version, src_version)) {
+        @compileError("version drift: build.zig.zon says " ++ zon.version ++ " but src/version.zig says " ++ src_version);
+    }
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
