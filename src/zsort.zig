@@ -37,10 +37,46 @@ fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytyp
     };
 }
 
+const ansi_reset = "\x1b[0m";
+const ansi_red = "\x1b[31m";
+const ansi_green = "\x1b[32m";
+const ansi_yellow = "\x1b[33m";
+const ansi_magenta = "\x1b[35m";
+const ansi_cyan = "\x1b[36m";
+const ansi_bold = "\x1b[1m";
+const ansi_dim = "\x1b[2m";
+
+/// Returns `code` when color is enabled, else an empty slice, so call sites
+/// can build plain and colored strings from the same format string.
+fn ansi(enable: bool, code: []const u8) []const u8 {
+    return if (enable) code else "";
+}
+
+fn printStdout(io: compat.Io, comptime fmt: []const u8, args: anytype) void {
+    var obuf: [4096]u8 = undefined;
+    var w = compat.stdoutWriter(io, &obuf);
+    w.interface.print(fmt, args) catch return;
+    w.interface.flush() catch return;
+}
+
+fn writeStdout(io: compat.Io, bytes: []const u8) void {
+    var obuf: [4096]u8 = undefined;
+    var w = compat.stdoutWriter(io, &obuf);
+    w.interface.writeAll(bytes) catch return;
+    w.interface.flush() catch return;
+}
+
+fn printStderr(io: compat.Io, comptime fmt: []const u8, args: anytype) void {
+    var obuf: [4096]u8 = undefined;
+    var w = compat.stderrWriter(io, &obuf);
+    w.interface.print(fmt, args) catch return;
+    w.interface.flush() catch return;
+}
+
 /// Replace terminal-control bytes with visible `\xNN` forms (ESC, CR, LF,
 /// BEL, backspace), so dynamic text (filenames, diff lines, error strings)
 /// can't inject ANSI escapes or line forgeries into the terminal;
-/// `compat.ansi_*` codes are the only intentional raw escape sequences.
+/// `ansi_*` codes are the only intentional raw escape sequences.
 /// Returns `s` unchanged when clean (no allocation). Propagates
 /// `error.OutOfMemory` rather than ever returning the raw input.
 /// ponytail: the five bytes a terminal interprets; tab/DEL are cosmetic only
@@ -278,11 +314,11 @@ pub fn formatUnifiedDiff(
     const after_start = old_lines.items.len - s;
     const after_end = @min(old_lines.items.len, after_start + 2);
 
-    const red = compat.ansi(use_color, compat.ansi_red);
-    const green = compat.ansi(use_color, compat.ansi_green);
-    const cyan = compat.ansi(use_color, compat.ansi_cyan);
-    const dim = compat.ansi(use_color, compat.ansi_dim);
-    const reset = compat.ansi(use_color, compat.ansi_reset);
+    const red = ansi(use_color, ansi_red);
+    const green = ansi(use_color, ansi_green);
+    const cyan = ansi(use_color, ansi_cyan);
+    const dim = ansi(use_color, ansi_dim);
+    const reset = ansi(use_color, ansi_reset);
 
     const esc_path = try escapeTerm(allocator, file_path);
     defer if (esc_path.ptr != file_path.ptr) allocator.free(esc_path);
@@ -332,7 +368,7 @@ pub fn formatUnifiedDiff(
 
 fn showDiff(io: compat.Io, allocator: std.mem.Allocator, file_path: []const u8, old: []const u8, new: []const u8, use_color: bool) void {
     const diff = formatUnifiedDiff(allocator, file_path, old, new, use_color) catch return;
-    compat.writeStdout(io, diff);
+    writeStdout(io, diff);
 }
 
 const excluded_dirs = [_][]const u8{ ".git", ".zig-cache", "zig-cache", "zig-out" };
@@ -672,10 +708,10 @@ pub fn formatSummary(
     mode: CliMode,
     use_color: bool,
 ) ?[]const u8 {
-    const yellow = compat.ansi(use_color, compat.ansi_yellow);
-    const red = compat.ansi(use_color, compat.ansi_red);
-    const magenta = compat.ansi(use_color, compat.ansi_magenta);
-    const reset = compat.ansi(use_color, compat.ansi_reset);
+    const yellow = ansi(use_color, ansi_yellow);
+    const red = ansi(use_color, ansi_red);
+    const magenta = ansi(use_color, ansi_magenta);
+    const reset = ansi(use_color, ansi_reset);
     const file_word = if (stats.files == 1) "file" else "files";
     const ms = @divTrunc(stats.elapsed_ns, std.time.ns_per_ms);
 
@@ -708,10 +744,10 @@ pub fn formatSummary(
 
 fn printHelp(io: compat.Io, use_color: bool) void {
     if (use_color) {
-        const bold = compat.ansi_bold;
-        const yellow = compat.ansi_yellow;
-        const reset = compat.ansi_reset;
-        compat.printStdout(io,
+        const bold = ansi_bold;
+        const yellow = ansi_yellow;
+        const reset = ansi_reset;
+        printStdout(io,
             \\Usage: zsort [check|fix] <dir|file>... [options]
             \\
             \\{[0]s}Modes:{[1]s}
@@ -727,7 +763,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
             \\
         , .{ bold, reset, yellow });
     } else {
-        compat.printStdout(io,
+        printStdout(io,
             \\Usage: zsort [check|fix] <dir|file>... [options]
             \\
             \\Modes:
@@ -777,10 +813,10 @@ pub const main = compat.entry(runMain).main;
 /// Parse/usage failures: the reason (red, indented) followed by the usage
 /// block (plain, flush left) so the reader gets the fix after the problem.
 fn printParseError(io: compat.Io, use_color: bool, err_msg: []const u8) void {
-    const red = compat.ansi(use_color, compat.ansi_red);
-    const reset = compat.ansi(use_color, compat.ansi_reset);
-    compat.printStderr(io, "  {s}{s}{s}\n\n", .{ red, err_msg, reset });
-    compat.printStderr(io,
+    const red = ansi(use_color, ansi_red);
+    const reset = ansi(use_color, ansi_reset);
+    printStderr(io, "  {s}{s}{s}\n\n", .{ red, err_msg, reset });
+    printStderr(io,
         \\Usage: zsort [check|fix] <dir|file>... [options]
         \\Run 'zsort --help' for details.
         \\
@@ -791,14 +827,14 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     const color = compat.isTty(io);
     const color_err = compat.isStderrTty(io);
 
-    const out_green = compat.ansi(color, compat.ansi_bold ++ compat.ansi_green);
-    const out_yellow = compat.ansi(color, compat.ansi_yellow);
-    const out_reset = compat.ansi(color, compat.ansi_reset);
+    const out_green = ansi(color, ansi_bold ++ ansi_green);
+    const out_yellow = ansi(color, ansi_yellow);
+    const out_reset = ansi(color, ansi_reset);
 
-    const err_red = compat.ansi(color_err, compat.ansi_red);
-    const err_yellow = compat.ansi(color_err, compat.ansi_yellow);
-    const err_magenta = compat.ansi(color_err, compat.ansi_magenta);
-    const err_reset = compat.ansi(color_err, compat.ansi_reset);
+    const err_red = ansi(color_err, ansi_red);
+    const err_yellow = ansi(color_err, ansi_yellow);
+    const err_magenta = ansi(color_err, ansi_magenta);
+    const err_reset = ansi(color_err, ansi_reset);
 
     var err_msg: ?[]const u8 = null;
     var parsed = parseArgs(allocator, args, &err_msg) catch |e| switch (e) {
@@ -815,7 +851,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         return;
     }
     if (parsed.version) {
-        compat.printStdout(io, "zsort {s}\n", .{version});
+        printStdout(io, "zsort {s}\n", .{version});
         return;
     }
 
@@ -827,7 +863,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         const stat = compat.statFile(io, compat.cwd(), target) catch |err| {
             const esc = try escapeTerm(allocator, target);
             defer if (esc.ptr != target.ptr) allocator.free(esc);
-            compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, esc, @errorName(err), err_reset });
+            printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, esc, @errorName(err), err_reset });
             error_count += 1;
             continue;
         };
@@ -836,7 +872,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
             var dir = compat.openDir(io, compat.cwd(), target, .{ .iterate = true }) catch |err| {
                 const esc = try escapeTerm(allocator, target);
                 defer if (esc.ptr != target.ptr) allocator.free(esc);
-                compat.printStderr(io, "  {s}Error opening{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc, err_reset, err_red, @errorName(err), err_reset });
+                printStderr(io, "  {s}Error opening{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc, err_reset, err_red, @errorName(err), err_reset });
                 error_count += 1;
                 continue;
             };
@@ -850,7 +886,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
                 if (err == error.OutOfMemory) return err;
                 const esc = try escapeTerm(allocator, target);
                 defer if (esc.ptr != target.ptr) allocator.free(esc);
-                compat.printStderr(io, "  {s}Error scanning{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc, err_reset, err_red, @errorName(err), err_reset });
+                printStderr(io, "  {s}Error scanning{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc, err_reset, err_red, @errorName(err), err_reset });
                 error_count += 1;
                 continue;
             };
@@ -859,7 +895,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         } else {
             const esc = try escapeTerm(allocator, target);
             defer if (esc.ptr != target.ptr) allocator.free(esc);
-            compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, esc, err_reset });
+            printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, esc, err_reset });
             error_count += 1;
         }
     }
@@ -869,7 +905,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
             const what: []const u8 = if (parsed.targets.items.len == 1) parsed.targets.items[0] else "the given targets";
             const esc = try escapeTerm(allocator, what);
             defer if (esc.ptr != what.ptr) allocator.free(esc);
-            compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, esc, err_reset });
+            printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, esc, err_reset });
         }
         std.process.exit(1);
     }
@@ -916,14 +952,14 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         if (slot.read_err) |msg| {
             const esc_msg = try escapeTerm(allocator, msg);
             defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
-            compat.printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, esc_msg, err_reset });
+            printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, esc_msg, err_reset });
             error_count += 1;
             continue;
         }
         if (slot.proc_err) |msg| {
             const esc_msg = try escapeTerm(allocator, msg);
             defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
-            compat.printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, esc_msg, err_reset });
+            printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, esc_msg, err_reset });
             error_count += 1;
             continue;
         }
@@ -931,7 +967,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         if (result.banned_msg) |msg| {
             const esc_msg = try escapeTerm(allocator, msg);
             defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
-            compat.printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, esc_path, err_reset, err_magenta, err_reset, esc_msg });
+            printStderr(io, "  {s}{s}{s}: {s}banned{s}: {s}\n", .{ err_yellow, esc_path, err_reset, err_magenta, err_reset, esc_msg });
             banned_count += 1;
         }
         if (!result.changed) continue;
@@ -941,12 +977,12 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         if (parsed.mode == .fix) {
             fixFile: {
                 compat.atomicWrite(io, compat.cwd(), file_path, result.new_text) catch |err| {
-                    compat.printStderr(io, "  {s}Error writing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, @errorName(err), err_reset });
+                    printStderr(io, "  {s}Error writing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, @errorName(err), err_reset });
                     error_count += 1;
                     break :fixFile;
                 };
                 fixed_count += 1;
-                compat.printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, esc_path, out_reset });
+                printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, esc_path, out_reset });
             }
         } else {
             if (result.stray_count > 0) {
@@ -966,14 +1002,14 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     };
     if (parsed.mode == .check) {
         if (formatSummary(allocator, stats, .check, color)) |summary| {
-            compat.printStdout(io, "{s}", .{summary});
+            printStdout(io, "{s}", .{summary});
         }
         if (changed_count > 0 or error_count > 0 or banned_count > 0) {
             std.process.exit(1);
         }
     } else {
         if (formatSummary(allocator, stats, .fix, color)) |summary| {
-            compat.printStdout(io, "{s}", .{summary});
+            printStdout(io, "{s}", .{summary});
         }
         if (error_count > 0 or banned_count > 0) std.process.exit(1);
     }

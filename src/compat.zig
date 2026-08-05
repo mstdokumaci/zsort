@@ -83,21 +83,6 @@ pub fn writeFile(io: Io, dir: Dir, sub_path: []const u8, data: []const u8) !void
     return dir.writeFile(.{ .sub_path = sub_path, .data = data });
 }
 
-pub const ansi_reset = "\x1b[0m";
-pub const ansi_red = "\x1b[31m";
-pub const ansi_green = "\x1b[32m";
-pub const ansi_yellow = "\x1b[33m";
-pub const ansi_magenta = "\x1b[35m";
-pub const ansi_cyan = "\x1b[36m";
-pub const ansi_bold = "\x1b[1m";
-pub const ansi_dim = "\x1b[2m";
-
-/// Returns `code` when color is enabled, else an empty slice, so call sites
-/// can build plain and colored strings from the same format string.
-pub fn ansi(enable: bool, code: []const u8) []const u8 {
-    return if (enable) code else "";
-}
-
 pub const Timer = if (is_v016) struct {
     io: std.Io,
     started: std.Io.Timestamp,
@@ -129,46 +114,20 @@ pub fn testIo() Io {
     return {};
 }
 
-pub fn printStdout(io: Io, comptime fmt: []const u8, args: anytype) void {
-    if (is_v016) {
-        var obuf: [4096]u8 = undefined;
-        var w = std.Io.File.stdout().writer(io, &obuf);
-        w.interface.print(fmt, args) catch return;
-        w.flush() catch return;
-    } else {
-        var obuf: [4096]u8 = undefined;
-        var w = std.fs.File.stdout().writer(&obuf);
-        w.interface.print(fmt, args) catch return;
-        w.interface.flush() catch return;
-    }
+pub const FileWriter = if (is_v016) std.Io.File.Writer else std.fs.File.Writer;
+
+/// Streaming writer over stdout/stderr: callers create a fresh instance per
+/// print call, so it must append at the current file offset. The positional
+/// default starts every fresh instance at offset 0 (pwritev), which would
+/// clobber earlier output.
+pub fn stdoutWriter(io: Io, buffer: []u8) FileWriter {
+    if (is_v016) return std.Io.File.stdout().writerStreaming(io, buffer);
+    return std.fs.File.stdout().writerStreaming(buffer);
 }
 
-pub fn writeStdout(io: Io, bytes: []const u8) void {
-    if (is_v016) {
-        var obuf: [4096]u8 = undefined;
-        var w = std.Io.File.stdout().writer(io, &obuf);
-        w.interface.writeAll(bytes) catch return;
-        w.flush() catch return;
-    } else {
-        var obuf: [4096]u8 = undefined;
-        var w = std.fs.File.stdout().writer(&obuf);
-        w.interface.writeAll(bytes) catch return;
-        w.interface.flush() catch return;
-    }
-}
-
-pub fn printStderr(io: Io, comptime fmt: []const u8, args: anytype) void {
-    if (is_v016) {
-        var obuf: [4096]u8 = undefined;
-        var w = std.Io.File.stderr().writer(io, &obuf);
-        w.interface.print(fmt, args) catch return;
-        w.flush() catch return;
-    } else {
-        var obuf: [4096]u8 = undefined;
-        var w = std.fs.File.stderr().writer(&obuf);
-        w.interface.print(fmt, args) catch return;
-        w.interface.flush() catch return;
-    }
+pub fn stderrWriter(io: Io, buffer: []u8) FileWriter {
+    if (is_v016) return std.Io.File.stderr().writerStreaming(io, buffer);
+    return std.fs.File.stderr().writerStreaming(buffer);
 }
 
 pub fn isTty(io: Io) bool {

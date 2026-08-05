@@ -39,6 +39,16 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
 
+    const compat_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/compat_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const run_compat_tests = b.addRunArtifact(compat_tests);
+    test_step.dependOn(&run_compat_tests.step);
+
     // Dogfood exe: always ReleaseFast — exercises the same binary users install
     // (zig build -Doptimize=ReleaseFast). Never installed. Host-targeted so the
     // run steps work regardless of -Dtarget. optimize lives on the module in
@@ -74,4 +84,5 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&exe.step);
     check_step.dependOn(&lib_check.step);
     check_step.dependOn(&tests.step);
+    check_step.dependOn(&compat_tests.step);
 }
