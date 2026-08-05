@@ -189,6 +189,55 @@ test "processSource: hoists multiline stray import intact" {
     try std.testing.expect(std.mem.indexOf(u8, result.new_text, "late.zig").? < std.mem.indexOf(u8, result.new_text, "pub fn main").?);
 }
 
+test "processSource: blank line inserted between block and body" {
+    const source =
+        \\pub fn main() void {}
+        \\
+        \\const build_options = @import("build_options");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    const expected = "const build_options = @import(\"build_options\");\n\npub fn main() void {}\n\n";
+    try std.testing.expectEqualStrings(expected, result.new_text);
+}
+
+test "processSource: clean block abutting body gains a blank line" {
+    const source = "const std = @import(\"std\");\npub fn main() {}\n";
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    const expected = "const std = @import(\"std\");\n\npub fn main() {}\n";
+    try std.testing.expectEqualStrings(expected, result.new_text);
+}
+
+test "processSource: no double blank when rest starts blank" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\pub fn main() {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(!result.changed);
+}
+
+test "processSource: doc comment stays attached to the following decl" {
+    const source =
+        \\const std = @import("std");
+        \\/// Docs for the decl.
+        \\pub fn main() {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expect(std.mem.indexOf(u8, result.new_text, "/// Docs for the decl.\npub fn main") != null);
+}
+
 test "processSource: division-deref is not mistaken for a block comment" {
     const source =
         \\const v = a/*b;
@@ -201,7 +250,7 @@ test "processSource: division-deref is not mistaken for a block comment" {
     };
     try std.testing.expect(result.changed);
     try std.testing.expectEqualStrings(
-        "const std = @import(\"std\");\nconst v = a/*b;\n",
+        "const std = @import(\"std\");\n\nconst v = a/*b;\n",
         result.new_text,
     );
 }
@@ -233,7 +282,7 @@ test "processSource: unterminated import at EOF terminates" {
     const result = try zsort.processSource(std.testing.allocator, source, &.{});
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
-    try std.testing.expect(!result.changed);
+    try std.testing.expect(result.changed);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "late.zig"));
 }
 
@@ -264,7 +313,7 @@ test "processSource: import expression ending in brace terminates" {
     defer std.testing.allocator.free(result.new_block);
     defer if (result.banned_msg) |msg| std.testing.allocator.free(msg);
     try std.testing.expect(result.banned);
-    try std.testing.expect(!result.changed);
+    try std.testing.expect(result.changed);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "const x = @import"));
 }
 
@@ -642,6 +691,25 @@ test "buildSortedImportText: alias imports hoisted after imports" {
     try std.testing.expect(bar_pos < debug_pos);
 }
 
+test "buildSortedImportText: @This() sorts first in the alias band" {
+    const source =
+        \\const std = @import("std");
+        \\const Io = std.Io;
+        \\const IP = @This();
+        \\
+        \\const rest = 1;
+    ;
+    const block_end = blockEndForTest(source);
+    var imports = try collectImportsForTest(source, block_end);
+    defer imports.deinit(std.testing.allocator);
+    var aliases = try collectAliasesForTest(source);
+    defer aliases.deinit(std.testing.allocator);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    defer std.testing.allocator.free(result);
+    const expected = "const std = @import(\"std\");\n\nconst IP = @This();\nconst Io = std.Io;\n\n";
+    try std.testing.expectEqualStrings(expected, result);
+}
+
 test "buildSortedImportText: full band order with members and aliases" {
     const source =
         \\const std = @import("std");
@@ -752,6 +820,41 @@ test "processSource: hoisted stray import lands in its group" {
     try std.testing.expect(std_pos < bar_pos);
     try std.testing.expect(bar_pos < late_pos);
     try std.testing.expect(std.mem.indexOf(u8, result.new_text, "pub fn main") != null);
+}
+
+test "processSource: alias stranded below block is hoisted into the alias band" {
+    const source =
+        \\const std = @import("std");
+        \\const log = std.log.scoped(.x);
+        \\const Allocator = std.mem.Allocator;
+        \\
+        \\pub fn main() {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    const std_pos = std.mem.indexOf(u8, result.new_text, "const std") orelse return error.TestUnexpectedResult;
+    const alloc_pos = std.mem.indexOf(u8, result.new_text, "const Allocator") orelse return error.TestUnexpectedResult;
+    const log_pos = std.mem.indexOf(u8, result.new_text, "const log") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std_pos < alloc_pos);
+    try std.testing.expect(alloc_pos < log_pos);
+}
+
+test "processSource: blank above hoisted stray import is preserved" {
+    const source =
+        \\const std = @import("std");
+        \\const log = std.log.scoped(.x);
+        \\
+        \\const late = @import("late.zig");
+        \\
+        \\pub fn main() {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expect(std.mem.indexOf(u8, result.new_text, "const log = std.log.scoped(.x);\n\n\npub fn main") != null);
 }
 
 test "processSource: output independent of input order" {
@@ -886,8 +989,15 @@ test "processSource: cimport block kept intact" {
     const result = try zsort.processSource(std.testing.allocator, source, &.{});
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
-    try std.testing.expect(!result.changed);
-    try std.testing.expectEqualStrings(source, result.new_text);
+    try std.testing.expect(result.changed);
+    const expected =
+        \\const c = @cImport({
+        \\    #include <stdio.h>
+        \\}); // c trailing
+        \\
+        \\const rest = 1;
+    ;
+    try std.testing.expectEqualStrings(expected, result.new_text);
 }
 
 test "processSource: stray cimport hoisted" {

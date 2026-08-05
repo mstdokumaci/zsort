@@ -6,6 +6,8 @@
 
 const std = @import("std");
 
+const Ast = std.zig.Ast;
+
 pub const class_std_builtin: u2 = 0;
 pub const class_third_party: u2 = 1;
 pub const class_local: u2 = 2;
@@ -85,8 +87,6 @@ pub fn findCommentStart(source: []const u8, line_start: usize) ?usize {
     return comment_start;
 }
 
-const Ast = std.zig.Ast;
-
 pub const Analysis = struct {
     imports: std.ArrayListUnmanaged(Import) = .empty,
     aliases: std.ArrayListUnmanaged(Import) = .empty,
@@ -162,15 +162,9 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
         }
     }
 
-    // Aliases outside the block are left alone (never hoisted).
-    var j: usize = 0;
-    while (j < result.aliases.items.len) {
-        if (result.aliases.items[j].start >= result.block_end) {
-            _ = result.aliases.orderedRemove(j);
-        } else {
-            j += 1;
-        }
-    }
+    // Aliases below the block are marked stray so they can be hoisted into
+    // the alias band, mirroring how stray imports are hoisted.
+    for (result.aliases.items) |*alias| alias.stray = alias.start >= result.block_end;
 
     for (result.imports.items) |*imp| imp.stray = imp.start >= result.block_end;
     std.sort.pdq(Import, result.imports.items, {}, Import.lessThan);
@@ -319,6 +313,20 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
             .member = member,
             .text = text,
         }, .alias = false };
+    }
+
+    if (std.mem.eql(u8, base_slice, "@This") and !member) {
+        // `const X = @This();` references the current module, so it has no
+        // resolvable path; the sentinel sorts it first in the alias band.
+        return .{ .imp = .{
+            .start = start,
+            .end = end,
+            .path = "@This()",
+            .class = class_std_builtin,
+            .comment_start = comment_start,
+            .name = name,
+            .text = text,
+        }, .alias = true };
     }
 
     if (member and isAliasChain(tree, init)) {

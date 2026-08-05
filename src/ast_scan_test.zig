@@ -202,7 +202,26 @@ test "analyze: spaced-dot alias stops the block" {
     try std.testing.expectEqual("const std = @import(\"std\");\n".len, analysis.block_end);
 }
 
-test "analyze: alias after the block is left alone" {
+test "analyze: @This() decl collected as alias" {
+    const source = "const IP = @This();\n";
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
+    try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("@This()", analysis.aliases.items[0].path);
+    try std.testing.expect(!analysis.aliases.items[0].member);
+    try std.testing.expectEqual(ast_scan.class_std_builtin, analysis.aliases.items[0].class);
+}
+
+test "analyze: @This() member chain is not an alias" {
+    const source = "const Foo = @This().Foo;\n";
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
+}
+
+test "analyze: alias after the block is marked stray" {
     const source =
         \\const std = @import("std");
         \\pub fn main() {}
@@ -210,7 +229,8 @@ test "analyze: alias after the block is left alone" {
     ;
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
+    try std.testing.expect(analysis.aliases.items[0].stray);
 }
 
 test "analyze: nested re-export import is not collected" {

@@ -155,7 +155,9 @@ changed `.zig` files are passed to the hook.
 - **Plain import** — `const x = @import("path");`
 - **Member import** — `const X = @import("path").Member;` (a member access
   after the import; the base path is what gets sorted)
-- **Alias** — `const X = module.Member;` (a dotted name with no `@import`)
+- **Alias** — `const X = module.Member;` (a dotted name with no `@import`).
+  `const X = @This();` is treated as an alias too; since it references the
+  current module it has no resolvable path and sorts first in the alias band.
 
 Imports are emitted in this order:
 
@@ -204,8 +206,10 @@ the same output. `@cImport` blocks count as third-party imports.
 - Sorts and groups top-of-file imports
 - Organizes typed imports (`const x: SomeType = @import(...)`) like plain ones
 - Hoists imports that appear later in the file into their proper group
+- Hoists aliases stranded below the import block into the alias band
 - Keeps comments that immediately precede an import attached to it (blank
   lines do not travel with an import)
+- Ensures a blank line separates the import block from the following code
 - Preserves `//!` module documentation and the file's line endings (CRLF kept)
 
 ### Escape hatches
