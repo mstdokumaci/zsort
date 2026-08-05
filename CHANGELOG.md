@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Banned-import messages now include the offending line number; summary
+  lines omit `failed`/`banned` counts when they are zero
+
 ### Added
 
 - Multiple targets: `zsort [check|fix] <path>...` accepts any mix of files

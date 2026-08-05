@@ -77,15 +77,17 @@ fn scanBannedPatterns(
     allocator: std.mem.Allocator,
     analysis: *const ast_scan.Analysis,
     banned_prefixes: []const []const u8,
+    source: []const u8,
 ) !?[]const u8 {
     for (analysis.calls.items) |call| {
+        const line = std.mem.count(u8, source[0..call.offset], "\n") + 1;
         if (std.mem.indexOfScalar(usize, analysis.allowed.items, call.offset) == null) {
-            return allocFmt(allocator, "inline @import inside a type expression", .{}) orelse return error.OutOfMemory;
+            return allocFmt(allocator, "inline @import inside a type expression (line {d})", .{line}) orelse return error.OutOfMemory;
         }
         if (call.path) |path| {
             for (banned_prefixes) |prefix| {
                 if (std.mem.startsWith(u8, path, prefix)) {
-                    return allocFmt(allocator, "imports from '{s}' are not allowed", .{prefix}) orelse return error.OutOfMemory;
+                    return allocFmt(allocator, "imports from '{s}' are not allowed (line {d})", .{ prefix, line }) orelse return error.OutOfMemory;
                 }
             }
         }
@@ -102,7 +104,7 @@ pub fn hasBannedPatterns(
     defer allocator.free(dup);
     var analysis = try ast_scan.analyze(allocator, dup);
     defer analysis.deinit(allocator);
-    return scanBannedPatterns(allocator, &analysis, banned_prefixes);
+    return scanBannedPatterns(allocator, &analysis, banned_prefixes, source);
 }
 
 fn detectNewline(source: []const u8) []const u8 {
@@ -499,7 +501,7 @@ pub fn processSource(
     const imports = analysis.imports.items;
     const aliases = analysis.aliases.items;
 
-    const banned_msg = try scanBannedPatterns(allocator, &analysis, banned_prefixes);
+    const banned_msg = try scanBannedPatterns(allocator, &analysis, banned_prefixes, source);
     errdefer if (banned_msg) |msg| allocator.free(msg);
 
     if (imports.len == 0) {
@@ -676,18 +678,32 @@ pub fn formatSummary(
     const reset = compat.ansi(use_color, compat.ansi_reset);
     const file_word = if (stats.files == 1) "file" else "files";
     const ms = @divTrunc(stats.elapsed_ns, std.time.ns_per_ms);
-    return switch (mode) {
-        .check => allocFmt(
-            allocator,
-            "  Found {[0]s}{[2]d}{[1]s} of {[0]s}{[6]d}{[1]s} {[7]s} to fix, {[3]s}{[4]d}{[1]s} failed, {[5]s}{[8]d}{[1]s} banned in {[0]s}{[9]d}{[1]s}ms.\n",
-            .{ yellow, reset, stats.changed, red, stats.errors, magenta, stats.files, file_word, stats.banned, ms },
-        ),
-        .fix => allocFmt(
-            allocator,
-            "\n  Fixed {[0]s}{[2]d}{[1]s} of {[0]s}{[6]d}{[1]s} {[7]s}, {[3]s}{[4]d}{[1]s} failed, {[5]s}{[8]d}{[1]s} banned in {[0]s}{[9]d}{[1]s}ms.\n",
-            .{ yellow, reset, stats.changed, red, stats.errors, magenta, stats.files, file_word, stats.banned, ms },
-        ),
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+    const head = switch (mode) {
+        .check => allocFmt(allocator, "  Found {s}{d}{s} of {s}{d}{s} {s} to fix", .{ yellow, stats.changed, reset, yellow, stats.files, reset, file_word }) orelse return null,
+        .fix => allocFmt(allocator, "\n  Fixed {s}{d}{s} of {s}{d}{s} {s}", .{ yellow, stats.changed, reset, yellow, stats.files, reset, file_word }) orelse return null,
     };
+    defer allocator.free(head);
+    out.appendSlice(allocator, head) catch return null;
+
+    if (stats.errors > 0) {
+        const seg = allocFmt(allocator, ", {s}{d}{s} failed", .{ red, stats.errors, reset }) orelse return null;
+        defer allocator.free(seg);
+        out.appendSlice(allocator, seg) catch return null;
+    }
+    if (stats.banned > 0) {
+        const seg = allocFmt(allocator, ", {s}{d}{s} banned", .{ magenta, stats.banned, reset }) orelse return null;
+        defer allocator.free(seg);
+        out.appendSlice(allocator, seg) catch return null;
+    }
+
+    const tail = allocFmt(allocator, " in {s}{d}{s}ms.\n", .{ yellow, ms, reset }) orelse return null;
+    defer allocator.free(tail);
+    out.appendSlice(allocator, tail) catch return null;
+    const owned = out.toOwnedSlice(allocator) catch return null;
+    return owned;
 }
 
 fn printHelp(io: compat.Io, use_color: bool) void {
