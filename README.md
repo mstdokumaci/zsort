@@ -118,7 +118,7 @@ Examples:
 ```sh
 zsort check src/          # verify; exit 1 if any file needs fixing
 zsort fix .               # rewrite all files in the repo
-zsort check src/ src/main.zig   # mixed directories and files
+zsort check src/ build.zig   # mixed directories and files
 zsort check . --ban-prefix ./ --ban-prefix src/
 ```
 

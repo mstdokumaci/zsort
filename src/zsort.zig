@@ -820,9 +820,17 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         };
 
         if (stat.kind == .directory) {
-            var dir = try compat.openDir(io, compat.cwd(), target, .{ .iterate = true });
+            var dir = compat.openDir(io, compat.cwd(), target, .{ .iterate = true }) catch |err| {
+                compat.printStderr(io, "  {s}Error opening{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, try escapeTerm(allocator, target), err_reset, err_red, @errorName(err), err_reset });
+                error_count += 1;
+                continue;
+            };
             defer compat.close(io, &dir);
             const ignores = try loadGitignore(io, allocator, dir);
+            defer {
+                for (ignores) |pattern| allocator.free(pattern);
+                allocator.free(ignores);
+            }
             try walkDir(io, allocator, dir, target, &files, ignores);
         } else if (stat.kind == .file) {
             try files.append(allocator, target);
