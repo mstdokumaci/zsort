@@ -1153,7 +1153,8 @@ test "parseArgs: check mode with prefixes" {
     var parsed = try zsort.parseArgs(std.testing.allocator, &args, &msg);
     defer parsed.deinit(std.testing.allocator);
     try std.testing.expect(parsed.mode == .check);
-    try std.testing.expectEqualStrings("src", parsed.target);
+    try std.testing.expectEqual(@as(usize, 1), parsed.targets.items.len);
+    try std.testing.expectEqualStrings("src", parsed.targets.items[0]);
     try std.testing.expectEqual(@as(usize, 2), parsed.banned_prefixes.items.len);
     try std.testing.expectEqualStrings("./", parsed.banned_prefixes.items[0]);
     try std.testing.expectEqualStrings("src/", parsed.banned_prefixes.items[1]);
@@ -1165,7 +1166,8 @@ test "parseArgs: fix mode" {
     var parsed = try zsort.parseArgs(std.testing.allocator, &args, &msg);
     defer parsed.deinit(std.testing.allocator);
     try std.testing.expect(parsed.mode == .fix);
-    try std.testing.expectEqualStrings("tools", parsed.target);
+    try std.testing.expectEqual(@as(usize, 1), parsed.targets.items.len);
+    try std.testing.expectEqualStrings("tools", parsed.targets.items[0]);
     try std.testing.expectEqual(@as(usize, 0), parsed.banned_prefixes.items.len);
 }
 
@@ -1210,16 +1212,23 @@ test "parseArgs: errors" {
     std.testing.allocator.free(msg.?);
     msg = null;
 
-    try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "extra" }, &msg));
-    try std.testing.expect(msg != null);
-    try std.testing.expect(std.mem.indexOf(u8, msg.?, "extra") != null);
-    std.testing.allocator.free(msg.?);
-    msg = null;
-
     try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "--bogus" }, &msg));
     try std.testing.expect(msg != null);
     try std.testing.expect(std.mem.indexOf(u8, msg.?, "Unknown option") != null);
     try std.testing.expect(std.mem.indexOf(u8, msg.?, "--bogus") != null);
+}
+
+test "parseArgs: multiple targets" {
+    var msg: ?[]const u8 = null;
+    const args = [_][]const u8{ "zsort", "check", "src", "tools", "src/main.zig" };
+    var parsed = try zsort.parseArgs(std.testing.allocator, &args, &msg);
+    defer parsed.deinit(std.testing.allocator);
+    try std.testing.expect(parsed.mode == .check);
+    try std.testing.expectEqual(@as(usize, 3), parsed.targets.items.len);
+    try std.testing.expectEqualStrings("src", parsed.targets.items[0]);
+    try std.testing.expectEqualStrings("tools", parsed.targets.items[1]);
+    try std.testing.expectEqualStrings("src/main.zig", parsed.targets.items[2]);
+    try std.testing.expectEqual(@as(usize, 0), parsed.banned_prefixes.items.len);
 }
 
 test "formatSummary: check mode, plain without color" {

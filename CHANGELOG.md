@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Multiple targets: `zsort [check|fix] <path>...` accepts any mix of files
+  and directories, enabling pre-commit hook usage
+- `.pre-commit-hooks.yaml` manifest with `zsort` (check) and `zsort-fix`
+  hooks; inaccessible targets are reported in the summary's failed count
+  and still exit 1
+
 ## [0.4.0] - 2026-08-04
 
 ### Changed

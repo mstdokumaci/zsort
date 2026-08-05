@@ -1,0 +1,12 @@
+- id: zsort
+  name: zsort
+  description: Verify Zig import ordering; fails when changes are needed
+  entry: zsort check
+  language: system
+  types: [zig]
+- id: zsort-fix
+  name: zsort (fix)
+  description: Sort Zig imports in place
+  entry: zsort fix
+  language: system
+  types: [zig]

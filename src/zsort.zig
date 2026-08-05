@@ -578,12 +578,13 @@ pub const ParseError = error{ OutOfMemory, Usage, InvalidMode, MissingBanValue, 
 
 pub const Args = struct {
     mode: CliMode,
-    target: []const u8,
+    targets: std.ArrayListUnmanaged([]const u8),
     banned_prefixes: std.ArrayListUnmanaged([]const u8),
     help: bool = false,
     version: bool = false,
 
     pub fn deinit(self: *Args, allocator: std.mem.Allocator) void {
+        self.targets.deinit(allocator);
         self.banned_prefixes.deinit(allocator);
     }
 };
@@ -596,9 +597,11 @@ pub fn parseArgs(
     err_msg: *?[]const u8,
 ) ParseError!Args {
     var mode: ?CliMode = null;
-    var target: ?[]const u8 = null;
     var help = false;
     var show_version = false;
+
+    var targets: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer targets.deinit(allocator);
 
     var banned_prefixes: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer banned_prefixes.deinit(allocator);
@@ -629,18 +632,15 @@ pub fn parseArgs(
                 err_msg.* = allocFmt(allocator, "Unknown mode '{s}'. Expected 'check' or 'fix'", .{arg});
                 return error.InvalidMode;
             }
-        } else if (target == null) {
-            target = arg;
         } else {
-            err_msg.* = allocFmt(allocator, "Unexpected argument '{s}'", .{arg});
-            return error.UnexpectedArg;
+            try targets.append(allocator, arg);
         }
     }
 
     if (help or show_version) {
         return .{
             .mode = mode orelse .check,
-            .target = target orelse ".",
+            .targets = targets,
             .banned_prefixes = banned_prefixes,
             .help = help,
             .version = show_version,
@@ -650,13 +650,13 @@ pub fn parseArgs(
         err_msg.* = allocFmt(allocator, "Missing mode and target", .{});
         return error.Usage;
     }
-    if (target == null) {
+    if (targets.items.len == 0) {
         err_msg.* = allocFmt(allocator, "Missing target", .{});
         return error.Usage;
     }
     return .{
         .mode = mode.?,
-        .target = target.?,
+        .targets = targets,
         .banned_prefixes = banned_prefixes,
     };
 }
@@ -701,7 +701,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
         const yellow = compat.ansi_yellow;
         const reset = compat.ansi_reset;
         compat.printStdout(io,
-            \\Usage: zsort [check|fix] <dir|file> [options]
+            \\Usage: zsort [check|fix] <dir|file>... [options]
             \\
             \\{[0]s}Modes:{[1]s}
             \\  {[2]s}check{[1]s}              Verify Zig import ordering; exit code 1 when changes are needed
@@ -712,10 +712,12 @@ fn printHelp(io: compat.Io, use_color: bool) void {
             \\  {[2]s}-h, --help{[1]s}         Show this help message
             \\  {[2]s}--version{[1]s}          Print version and exit
             \\
+            \\Multiple paths may be given; directories are scanned recursively.
+            \\
         , .{ bold, reset, yellow });
     } else {
         compat.printStdout(io,
-            \\Usage: zsort [check|fix] <dir|file> [options]
+            \\Usage: zsort [check|fix] <dir|file>... [options]
             \\
             \\Modes:
             \\  check              Verify Zig import ordering; exit code 1 when changes are needed
@@ -725,6 +727,8 @@ fn printHelp(io: compat.Io, use_color: bool) void {
             \\  --ban-prefix <p>   Reject import paths starting with this prefix (repeatable)
             \\  -h, --help         Show this help message
             \\  --version          Print version and exit
+            \\
+            \\Multiple paths may be given; directories are scanned recursively.
             \\
         , .{});
     }
@@ -766,7 +770,7 @@ fn printParseError(io: compat.Io, use_color: bool, err_msg: []const u8) void {
     const reset = compat.ansi(use_color, compat.ansi_reset);
     compat.printStderr(io, "  {s}{s}{s}\n\n", .{ red, err_msg, reset });
     compat.printStderr(io,
-        \\Usage: zsort [check|fix] <dir|file> [options]
+        \\Usage: zsort [check|fix] <dir|file>... [options]
         \\Run 'zsort --help' for details.
         \\
     , .{});
@@ -807,25 +811,32 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     var files: std.ArrayListUnmanaged([]const u8) = .empty;
     defer files.deinit(allocator);
 
-    const stat = compat.statFile(io, compat.cwd(), parsed.target) catch |err| {
-        compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, try escapeTerm(allocator, parsed.target), @errorName(err), err_reset });
-        std.process.exit(1);
-    };
+    var error_count: usize = 0;
+    for (parsed.targets.items) |target| {
+        const stat = compat.statFile(io, compat.cwd(), target) catch |err| {
+            compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, try escapeTerm(allocator, target), @errorName(err), err_reset });
+            error_count += 1;
+            continue;
+        };
 
-    if (stat.kind == .directory) {
-        var dir = try compat.openDir(io, compat.cwd(), parsed.target, .{ .iterate = true });
-        defer compat.close(io, &dir);
-        const ignores = try loadGitignore(io, allocator, dir);
-        try walkDir(io, allocator, dir, parsed.target, &files, ignores);
-    } else if (stat.kind == .file) {
-        try files.append(allocator, parsed.target);
-    } else {
-        compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, try escapeTerm(allocator, parsed.target), err_reset });
-        std.process.exit(1);
+        if (stat.kind == .directory) {
+            var dir = try compat.openDir(io, compat.cwd(), target, .{ .iterate = true });
+            defer compat.close(io, &dir);
+            const ignores = try loadGitignore(io, allocator, dir);
+            try walkDir(io, allocator, dir, target, &files, ignores);
+        } else if (stat.kind == .file) {
+            try files.append(allocator, target);
+        } else {
+            compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, try escapeTerm(allocator, target), err_reset });
+            error_count += 1;
+        }
     }
 
     if (files.items.len == 0) {
-        compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, try escapeTerm(allocator, parsed.target), err_reset });
+        if (error_count == 0) {
+            const what: []const u8 = if (parsed.targets.items.len == 1) parsed.targets.items[0] else "the given targets";
+            compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, try escapeTerm(allocator, what), err_reset });
+        }
         std.process.exit(1);
     }
 
@@ -858,7 +869,6 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
 
     var changed_count: usize = 0;
     var fixed_count: usize = 0;
-    var error_count: usize = 0;
     var banned_count: usize = 0;
 
     for (jobs) |*job| {
