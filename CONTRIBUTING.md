@@ -94,9 +94,6 @@ real package dependency.
 2. Tag and push: `git tag v0.3.0 && git push origin v0.3.0`. This triggers
    the `release` workflow (cross-platform binaries) and `bump-tap` (Homebrew
    formula bump).
-3. Fill in the README example hash: run `zig fetch
-   https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.3.0.tar.gz`,
-   paste the printed hash into the README, commit, and push.
-4. Verify: the release page has the four `zsort-<target>.tar.gz` binaries,
+3. Verify: the release page has the four `zsort-<target>.tar.gz` binaries,
    and the Homebrew tap was bumped. To re-publish, delete the release and run
    the `release` workflow manually with the tag input.

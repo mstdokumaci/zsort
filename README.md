@@ -38,7 +38,7 @@ Linux and macOS binaries are attached to each
 Run:
 
 ```sh
-zig fetch --save https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.4.0.tar.gz
+zig fetch --save https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.5.0.tar.gz
 ```
 
 To add zsort to your `build.zig.zon`:
@@ -50,7 +50,7 @@ To add zsort to your `build.zig.zon`:
     // .fingerprint
     .dependencies = .{
         .zsort = .{
-            .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.4.0.tar.gz",
+            .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.5.0.tar.gz",
             // .hash
             .lazy = true,
         },
