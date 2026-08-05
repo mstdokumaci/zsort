@@ -99,7 +99,7 @@ The binary is written to `zig-out/bin/zsort`.
 ## Usage
 
 ```text
-Usage: zsort [check|fix] <dir|file> [options]
+Usage: zsort [check|fix] <dir|file>... [options]
 
 Modes:
   check              Verify Zig import ordering; exit code 1 when changes are needed
@@ -109,6 +109,8 @@ Options:
   --ban-prefix <p>   Reject import paths starting with this prefix (repeatable)
   -h, --help         Show this help message
   --version          Print version and exit
+
+Multiple paths may be given; directories are scanned recursively.
 ```
 
 Examples:
@@ -116,12 +118,35 @@ Examples:
 ```sh
 zsort check src/          # verify; exit 1 if any file needs fixing
 zsort fix .               # rewrite all files in the repo
+zsort check src/ build.zig   # mixed directories and files
 zsort check . --ban-prefix ./ --ban-prefix src/
 ```
 
 In `check` mode, files that need changes are reported with a unified diff.
 `zsort` exits with code 0 when everything is clean, and 1 when any file needs
 fixing, errors, or banned imports are found.
+
+## Pre-commit
+
+`zsort` ships a `.pre-commit-hooks.yaml` manifest with two hooks:
+
+- `zsort` — `check` mode; fails when any passed file needs fixing
+- `zsort-fix` — `fix` mode; rewrites files in place (use only one)
+
+Add to your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/mstdokumaci/zsort
+    rev: v0.5.0        # or the latest release tag
+    hooks:
+      - id: zsort
+      # - id: zsort-fix  # fix mode; use only one
+```
+
+Requires `zsort` on your `$PATH` (the hooks run with `language: system`).
+Use `args` to pass extra flags, e.g. `args: [--ban-prefix, 'src/']`. Only
+changed `.zig` files are passed to the hook.
 
 ## Ordering rules
 
