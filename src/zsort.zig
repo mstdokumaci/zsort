@@ -485,6 +485,32 @@ pub fn walkDir(
     }
 }
 
+/// Start of the first non-blank line at or after `start`, up to `limit`;
+/// blank lines are skipped so a stray import's removal window starts at its
+/// first comment line rather than the blank run above it.
+fn firstNonBlankLineStart(source: []const u8, start: usize, limit: usize) usize {
+    var pos = start;
+    while (pos < limit) {
+        const le = findLineEnd(source, pos);
+        if (std.mem.trim(u8, source[pos..le], " \t\r\n").len == 0) {
+            pos = le;
+        } else {
+            return pos;
+        }
+    }
+    return limit;
+}
+
+/// True when `text`'s last line is blank (works for LF and CRLF endings).
+fn endsWithBlankLine(text: []const u8) bool {
+    if (text.len == 0 or text[text.len - 1] != '\n') return false;
+    var end = text.len - 1;
+    if (end > 0 and text[end - 1] == '\r') end -= 1;
+    var start = end;
+    while (start > 0 and text[start - 1] != '\n') : (start -= 1) {}
+    return start == end;
+}
+
 fn hasSkipComment(source: []const u8) bool {
     var pos: usize = 0;
     while (pos < source.len) {
@@ -506,6 +532,8 @@ const ProcessResult = struct {
     banned: bool,
     banned_msg: ?[]const u8,
     stray_count: usize,
+    /// A blank line was inserted between the sorted block and the body.
+    junction_blank: bool = false,
 };
 
 pub fn processSource(
@@ -554,6 +582,11 @@ pub fn processSource(
             try stray_imports.append(allocator, imp);
         }
     }
+    for (aliases) |alias| {
+        if (alias.stray) {
+            try stray_imports.append(allocator, alias);
+        }
+    }
 
     var rest: []const u8 = source[block_end..];
     var rest_owned: ?[]const u8 = null;
@@ -568,7 +601,11 @@ pub fn processSource(
         defer buf.deinit(allocator);
         var pos: usize = block_end;
         for (stray_imports.items) |imp| {
-            const raw_start = if (imp.comment_start) |cs| cs else imp.start;
+            // The comment window starts at the first non-blank line so that
+            // blank lines separating the import from the code above survive
+            // the removal instead of being swallowed with it.
+            var raw_start = imp.start;
+            if (imp.comment_start) |cs| raw_start = firstNonBlankLineStart(source, cs, imp.start);
             const removal_start = @max(raw_start, pos);
             if (imp.end <= pos) continue;
             try buf.appendSlice(allocator, source[pos..removal_start]);
@@ -584,9 +621,31 @@ pub fn processSource(
     errdefer allocator.free(new_imports);
 
     const original_block = source[0..block_end];
-    const changed = !std.mem.eql(u8, original_block, new_imports) or stray_imports.items.len > 0;
+    // The sorted block is separated from the body by a blank line unless the
+    // block already ends with a blank line or a trailing comment (which stays
+    // attached to the decl it documents).
+    var last_span_end: usize = 0;
+    for (imports) |imp| last_span_end = @max(last_span_end, imp.end);
+    for (aliases) |alias| last_span_end = @max(last_span_end, alias.end);
+    var has_trailing_comment = false;
+    var scan_pos = last_span_end;
+    while (scan_pos < block_end) {
+        const le = findLineEnd(source, scan_pos);
+        const line = std.mem.trim(u8, source[scan_pos..le], " \t\r\n");
+        if (std.mem.startsWith(u8, line, "//")) {
+            has_trailing_comment = true;
+            break;
+        }
+        if (line.len != 0) break;
+        scan_pos = le;
+    }
+    const junction_blank = !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0 and rest[0] != '\n' and rest[0] != '\r';
+    const changed = !std.mem.eql(u8, original_block, new_imports) or stray_imports.items.len > 0 or junction_blank;
 
-    const full_new = try std.mem.concat(allocator, u8, &.{ new_imports, rest });
+    const full_new = if (junction_blank)
+        try std.mem.concat(allocator, u8, &.{ new_imports, detectNewline(source), rest })
+    else
+        try std.mem.concat(allocator, u8, &.{ new_imports, rest });
     if (rest_owned) |owned| allocator.free(owned);
 
     return .{
@@ -597,6 +656,7 @@ pub fn processSource(
         .banned = banned_msg != null,
         .banned_msg = banned_msg,
         .stray_count = stray_imports.items.len,
+        .junction_blank = junction_blank,
     };
 }
 
@@ -792,7 +852,7 @@ const FileJob = struct {
 
 fn processFileJob(job: *const FileJob, io: compat.Io) void {
     const allocator = job.slot.arena.allocator();
-    const source = compat.readFileAllocZ(io, compat.cwd(), job.path, allocator, 10 * 1024 * 1024) catch |err| {
+    const source = compat.readFileAllocZ(io, compat.cwd(), job.path, allocator, 32 * 1024 * 1024) catch |err| {
         job.slot.read_err = @errorName(err);
         return;
     };
@@ -980,7 +1040,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
                 printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, esc_path, out_reset });
             }
         } else {
-            if (result.stray_count > 0) {
+            if (result.stray_count > 0 or result.junction_blank) {
                 showDiff(io, allocator, file_path, slot.source, result.new_text, color);
             } else {
                 showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block, color);

@@ -11,6 +11,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `check`/`fix` output is no longer corrupted when redirected to a file:
   stdout/stderr writers now append at the current offset instead of the
   positional default, which overwrote earlier output from offset 0
+- `const X = @This();` is now treated as an alias and sorts first in the
+  alias band instead of splitting the import block
+- aliases stranded below the import block are now hoisted into the alias
+  band instead of being left unsorted in the body
+- hoisting a stray import no longer swallows the blank line separating it
+  from the code above
+- the sorted import block is now always separated from the body by a blank
+  line (doc comments stay attached to the decls they document)
+- the maximum readable file size was raised from 10 MiB to 32 MiB, so large
+  generated files are processed instead of failing with `FileTooBig`
 
 ## [0.5.0] - 2026-08-05
 
