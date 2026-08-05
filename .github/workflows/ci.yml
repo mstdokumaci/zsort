@@ -76,19 +76,6 @@ jobs:
       - run: zig build test --summary all
       - run: zig build check --summary all
 
-  package-consumer:
-    strategy:
-      fail-fast: false
-      matrix:
-        zig: [0.15.2, 0.16.0]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ matrix.zig }}
   precommit-hooks:
     runs-on: ubuntu-latest
     steps:
