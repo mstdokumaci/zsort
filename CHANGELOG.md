@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `check`/`fix` output is no longer corrupted when redirected to a file:
+  stdout/stderr writers now append at the current offset instead of the
+  positional default, which overwrote earlier output from offset 0
+
 ## [0.5.0] - 2026-08-05
 
 ### Changed
