@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ast_scan = @import("ast_scan.zig");
 const compat = @import("compat.zig");
 const zsort = @import("zsort.zig");
 
@@ -134,10 +135,10 @@ test "buildSortedImportText: comments separating groups" {
     try std.testing.expect(std.mem.indexOf(u8, result, "sqlite") != null);
 }
 
-fn collectImportsForTest(source: [:0]const u8, block_end: usize) !std.ArrayListUnmanaged(zsort.Import) {
-    var analysis = try zsort.analyze(std.testing.allocator, source);
+fn collectImportsForTest(source: [:0]const u8, block_end: usize) !std.ArrayListUnmanaged(ast_scan.Import) {
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
-    var imports: std.ArrayListUnmanaged(zsort.Import) = .empty;
+    var imports: std.ArrayListUnmanaged(ast_scan.Import) = .empty;
     errdefer imports.deinit(std.testing.allocator);
     try imports.appendSlice(std.testing.allocator, analysis.imports.items);
     for (imports.items) |*imp| imp.stray = imp.start >= block_end;
@@ -145,15 +146,15 @@ fn collectImportsForTest(source: [:0]const u8, block_end: usize) !std.ArrayListU
 }
 
 fn blockEndForTest(source: [:0]const u8) usize {
-    var analysis = zsort.analyze(std.testing.allocator, source) catch return source.len;
+    var analysis = ast_scan.analyze(std.testing.allocator, source) catch return source.len;
     defer analysis.deinit(std.testing.allocator);
     return analysis.block_end;
 }
 
-fn collectAliasesForTest(source: [:0]const u8) !std.ArrayListUnmanaged(zsort.Import) {
-    var analysis = try zsort.analyze(std.testing.allocator, source);
+fn collectAliasesForTest(source: [:0]const u8) !std.ArrayListUnmanaged(ast_scan.Import) {
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
-    var aliases: std.ArrayListUnmanaged(zsort.Import) = .empty;
+    var aliases: std.ArrayListUnmanaged(ast_scan.Import) = .empty;
     errdefer aliases.deinit(std.testing.allocator);
     try aliases.appendSlice(std.testing.allocator, analysis.aliases.items);
     return aliases;
@@ -570,11 +571,11 @@ test "collectImports: classes and sorted order" {
     var imports = try collectImportsForTest(source, block_end);
     defer imports.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 3), imports.items.len);
-    try std.testing.expectEqual(zsort.class_std_builtin, imports.items[0].class);
+    try std.testing.expectEqual(ast_scan.class_std_builtin, imports.items[0].class);
     try std.testing.expectEqualStrings("std", imports.items[0].path);
-    try std.testing.expectEqual(zsort.class_third_party, imports.items[1].class);
+    try std.testing.expectEqual(ast_scan.class_third_party, imports.items[1].class);
     try std.testing.expectEqualStrings("sqlite", imports.items[1].path);
-    try std.testing.expectEqual(zsort.class_local, imports.items[2].class);
+    try std.testing.expectEqual(ast_scan.class_local, imports.items[2].class);
     try std.testing.expectEqualStrings("foo.zig", imports.items[2].path);
 }
 

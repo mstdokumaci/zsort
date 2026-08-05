@@ -4,15 +4,10 @@ const std = @import("std");
 
 const ast_scan = @import("ast_scan.zig");
 const compat = @import("compat.zig");
-pub const version = @import("version.zig").version;
+const version = @import("version.zig").version;
 
+const Import = ast_scan.Import;
 const findLineEnd = ast_scan.findLineEnd;
-pub const Import = ast_scan.Import;
-pub const analyze = ast_scan.analyze;
-pub const class_local = ast_scan.class_local;
-pub const class_std_builtin = ast_scan.class_std_builtin;
-pub const class_third_party = ast_scan.class_third_party;
-pub const classify = ast_scan.classify;
 
 /// Emit the comment block attached to a decl (`source[comment_start..imp.start]`),
 /// dropping blank lines: `findCommentStart` walks back over blanks, but a
@@ -503,7 +498,7 @@ fn hasSkipComment(source: []const u8) bool {
     return false;
 }
 
-pub const ProcessResult = struct {
+const ProcessResult = struct {
     new_text: []const u8,
     new_block: []const u8,
     block_end: usize,
@@ -605,9 +600,9 @@ pub fn processSource(
     };
 }
 
-pub const CliMode = enum { check, fix };
+const CliMode = enum { check, fix };
 
-pub const ParseError = error{ OutOfMemory, Usage, InvalidMode, MissingBanValue, UnexpectedArg };
+const ParseError = error{ OutOfMemory, Usage, InvalidMode, MissingBanValue, UnexpectedArg };
 
 pub const Args = struct {
     mode: CliMode,
@@ -694,7 +689,7 @@ pub fn parseArgs(
     };
 }
 
-pub const SummaryStats = struct {
+const SummaryStats = struct {
     changed: usize,
     errors: usize,
     banned: usize,

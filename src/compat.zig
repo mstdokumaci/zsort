@@ -8,10 +8,10 @@ pub const is_v016 = builtin.zig_version.major == 0 and builtin.zig_version.minor
 
 pub const Io = if (is_v016) std.Io else void;
 pub const Dir = if (is_v016) std.Io.Dir else std.fs.Dir;
-pub const Entry = if (is_v016) std.Io.Dir.Entry else std.fs.Dir.Entry;
+const Entry = if (is_v016) std.Io.Dir.Entry else std.fs.Dir.Entry;
 pub const Iterator = if (is_v016) std.Io.Dir.Iterator else std.fs.Dir.Iterator;
-pub const OpenOptions = if (is_v016) std.Io.Dir.OpenOptions else std.fs.Dir.OpenOptions;
-pub const Stat = if (is_v016) std.Io.File.Stat else std.fs.File.Stat;
+const OpenOptions = if (is_v016) std.Io.Dir.OpenOptions else std.fs.Dir.OpenOptions;
+const Stat = if (is_v016) std.Io.File.Stat else std.fs.File.Stat;
 
 pub fn cwd() Dir {
     if (is_v016) return std.Io.Dir.cwd();
@@ -114,7 +114,7 @@ pub fn testIo() Io {
     return {};
 }
 
-pub const FileWriter = if (is_v016) std.Io.File.Writer else std.fs.File.Writer;
+const FileWriter = if (is_v016) std.Io.File.Writer else std.fs.File.Writer;
 
 /// Streaming writer over stdout/stderr: callers create a fresh instance per
 /// print call, so it must append at the current file offset. The positional

@@ -50,7 +50,7 @@ pub fn classify(path: []const u8) u2 {
     return class_third_party;
 }
 
-pub fn findLineStart(source: []const u8, pos: usize) usize {
+fn findLineStart(source: []const u8, pos: usize) usize {
     var i = pos;
     while (i > 0) : (i -= 1) {
         if (source[i - 1] == '\n') return i;
@@ -252,12 +252,12 @@ fn lineBlockEnd(source: []const u8, imports: []const Import, aliases: []const Im
 /// Every `@import` builtin call in the tree, with its source offset and path
 /// (when the argument is a plain string literal). Drives banned-pattern
 /// detection; offsets match `tree.source`.
-pub const ImportCall = struct {
+const ImportCall = struct {
     offset: usize,
     path: ?[]const u8,
 };
 
-pub fn importCalls(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]const u8), tree: Ast) !std.ArrayListUnmanaged(ImportCall) {
+fn importCalls(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]const u8), tree: Ast) !std.ArrayListUnmanaged(ImportCall) {
     var calls: std.ArrayListUnmanaged(ImportCall) = .empty;
     errdefer calls.deinit(allocator);
 
