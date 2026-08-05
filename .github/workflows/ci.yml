@@ -89,6 +89,43 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ matrix.zig }}
+  precommit-hooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Build and install zsort
+        run: |
+          zig build -Doptimize=ReleaseFast
+          sudo install -m 0755 zig-out/bin/zsort /usr/local/bin/zsort
+      - name: Validate manifest and exercise hooks
+        run: |
+          pip install pre-commit
+          pre-commit validate-manifest .pre-commit-hooks.yaml
+          if pre-commit try-repo . zsort --files test/consumer/src/main.zig; then
+            echo "expected 'zsort' hook to fail on the unsorted fixture" >&2
+            exit 1
+          fi
+          pre-commit try-repo . zsort-fix --files test/consumer/src/main.zig
+          pre-commit try-repo . zsort --files test/consumer/src/main.zig
+
+  package-consumer:
+    strategy:
+      fail-fast: false
+      matrix:
+        zig: [0.15.2, 0.16.0]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ matrix.zig }}
       - name: Exercise zsort as a package dependency
         run: |
           set -euo pipefail
