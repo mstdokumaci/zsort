@@ -93,6 +93,7 @@ test "hasBannedPatterns: inline @import detected even without prefixes" {
     const source = "fn foo() @import(\"bar\").Type {\n}\n";
     const msg = try zsort.hasBannedPatterns(std.testing.allocator, source, &.{}) orelse return error.TestFailed;
     defer std.testing.allocator.free(msg);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "(line 1)") != null);
 }
 
 test "buildSortedImportText: basic sort" {
@@ -1045,6 +1046,18 @@ test "hasBannedPatterns: typed import with banned prefix detected" {
     const msg = try zsort.hasBannedPatterns(std.testing.allocator, source, &.{"./"}) orelse return error.TestFailed;
     defer std.testing.allocator.free(msg);
     try std.testing.expect(std.mem.indexOf(u8, msg, "./") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "(line 1)") != null);
+}
+
+test "hasBannedPatterns: message includes the offending line number" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\const bar = @import("./bar");
+    ;
+    const msg = try zsort.hasBannedPatterns(std.testing.allocator, source, &.{"./"}) orelse return error.TestFailed;
+    defer std.testing.allocator.free(msg);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "(line 3)") != null);
 }
 
 test "processSource: typed import hoisted and sorted" {
@@ -1240,7 +1253,7 @@ test "formatSummary: check mode, plain without color" {
         .elapsed_ns = 12 * std.time.ns_per_ms,
     }, .check, false) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
-    try std.testing.expectEqualStrings("  Found 1 of 179 files to fix, 2 failed, 0 banned in 12ms.\n", s);
+    try std.testing.expectEqualStrings("  Found 1 of 179 files to fix, 2 failed in 12ms.\n", s);
 }
 
 test "formatSummary: fix mode, plain without color" {
@@ -1252,7 +1265,7 @@ test "formatSummary: fix mode, plain without color" {
         .elapsed_ns = 500_000,
     }, .fix, false) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
-    try std.testing.expectEqualStrings("\n  Fixed 0 of 179 files, 0 failed, 0 banned in 0ms.\n", s);
+    try std.testing.expectEqualStrings("\n  Fixed 0 of 179 files in 0ms.\n", s);
 }
 
 test "formatSummary: colorized per-category numbers, sub-ms truncates to 0ms" {
@@ -1264,7 +1277,7 @@ test "formatSummary: colorized per-category numbers, sub-ms truncates to 0ms" {
         .elapsed_ns = 500_000,
     }, .check, true) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
-    try std.testing.expectEqualStrings("  Found \x1b[33m0\x1b[0m of \x1b[33m179\x1b[0m files to fix, \x1b[31m0\x1b[0m failed, \x1b[35m0\x1b[0m banned in \x1b[33m0\x1b[0mms.\n", s);
+    try std.testing.expectEqualStrings("  Found \x1b[33m0\x1b[0m of \x1b[33m179\x1b[0m files to fix in \x1b[33m0\x1b[0mms.\n", s);
     try std.testing.expect(std.mem.indexOf(u8, s, "\x1b[") != null);
 }
 
@@ -1289,5 +1302,29 @@ test "formatSummary: single-file target uses singular 'file'" {
         .elapsed_ns = 2 * std.time.ns_per_ms,
     }, .check, false) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
-    try std.testing.expectEqualStrings("  Found 1 of 1 file to fix, 0 failed, 0 banned in 2ms.\n", s);
+    try std.testing.expectEqualStrings("  Found 1 of 1 file to fix in 2ms.\n", s);
+}
+
+test "formatSummary: banned-only segment shown, failed omitted" {
+    const s = zsort.formatSummary(std.testing.allocator, .{
+        .changed = 1,
+        .errors = 0,
+        .banned = 3,
+        .files = 4,
+        .elapsed_ns = 0,
+    }, .check, true) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(s);
+    try std.testing.expectEqualStrings("  Found \x1b[33m1\x1b[0m of \x1b[33m4\x1b[0m files to fix, \x1b[35m3\x1b[0m banned in \x1b[33m0\x1b[0mms.\n", s);
+}
+
+test "formatSummary: failed and banned segments both shown in order" {
+    const s = zsort.formatSummary(std.testing.allocator, .{
+        .changed = 1,
+        .errors = 2,
+        .banned = 3,
+        .files = 4,
+        .elapsed_ns = 5 * std.time.ns_per_ms,
+    }, .check, false) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(s);
+    try std.testing.expectEqualStrings("  Found 1 of 4 files to fix, 2 failed, 3 banned in 5ms.\n", s);
 }
