@@ -37,11 +37,6 @@ fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytyp
     };
 }
 
-/// Replace ESC bytes (0x1b) with the visible `\x1b`, so dynamic text
-/// (filenames, error strings) can't inject ANSI escapes into the terminal;
-/// `compat.ansi_*` codes are the only intentional raw escape sequences.
-/// Returns `s` unchanged when clean (no allocation); degrades to `s` on OOM.
-/// ponytail: ESC-only, matching git's quoting of paths; other control bytes have no terminal effect
 /// Replace terminal-control bytes with visible `\xNN` forms (ESC, CR, LF,
 /// BEL, backspace), so dynamic text (filenames, diff lines, error strings)
 /// can't inject ANSI escapes or line forgeries into the terminal;
@@ -814,14 +809,18 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     var error_count: usize = 0;
     for (parsed.targets.items) |target| {
         const stat = compat.statFile(io, compat.cwd(), target) catch |err| {
-            compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, try escapeTerm(allocator, target), @errorName(err), err_reset });
+            const esc = try escapeTerm(allocator, target);
+            defer if (esc.ptr != target.ptr) allocator.free(esc);
+            compat.printStderr(io, "  {s}Cannot access '{s}': {s}{s}\n", .{ err_red, esc, @errorName(err), err_reset });
             error_count += 1;
             continue;
         };
 
         if (stat.kind == .directory) {
             var dir = compat.openDir(io, compat.cwd(), target, .{ .iterate = true }) catch |err| {
-                compat.printStderr(io, "  {s}Error opening{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, try escapeTerm(allocator, target), err_reset, err_red, @errorName(err), err_reset });
+                const esc = try escapeTerm(allocator, target);
+                defer if (esc.ptr != target.ptr) allocator.free(esc);
+                compat.printStderr(io, "  {s}Error opening{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc, err_reset, err_red, @errorName(err), err_reset });
                 error_count += 1;
                 continue;
             };
@@ -831,11 +830,20 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
                 for (ignores) |pattern| allocator.free(pattern);
                 allocator.free(ignores);
             }
-            try walkDir(io, allocator, dir, target, &files, ignores);
+            walkDir(io, allocator, dir, target, &files, ignores) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                const esc = try escapeTerm(allocator, target);
+                defer if (esc.ptr != target.ptr) allocator.free(esc);
+                compat.printStderr(io, "  {s}Error scanning{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc, err_reset, err_red, @errorName(err), err_reset });
+                error_count += 1;
+                continue;
+            };
         } else if (stat.kind == .file) {
             try files.append(allocator, target);
         } else {
-            compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, try escapeTerm(allocator, target), err_reset });
+            const esc = try escapeTerm(allocator, target);
+            defer if (esc.ptr != target.ptr) allocator.free(esc);
+            compat.printStderr(io, "  {s}'{s}' is neither a file nor a directory{s}\n", .{ err_red, esc, err_reset });
             error_count += 1;
         }
     }
@@ -843,7 +851,9 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     if (files.items.len == 0) {
         if (error_count == 0) {
             const what: []const u8 = if (parsed.targets.items.len == 1) parsed.targets.items[0] else "the given targets";
-            compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, try escapeTerm(allocator, what), err_reset });
+            const esc = try escapeTerm(allocator, what);
+            defer if (esc.ptr != what.ptr) allocator.free(esc);
+            compat.printStderr(io, "  {s}No .zig files found in '{s}'{s}\n", .{ err_red, esc, err_reset });
         }
         std.process.exit(1);
     }
