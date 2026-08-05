@@ -97,7 +97,10 @@ jobs:
             echo "expected 'zsort' hook to fail on the unsorted fixture" >&2
             exit 1
           fi
-          pre-commit try-repo . zsort-fix --files test/consumer/src/main.zig
+          if pre-commit try-repo . zsort-fix --files test/consumer/src/main.zig; then
+            echo "expected 'zsort-fix' hook to modify the unsorted fixture" >&2
+            exit 1
+          fi
           pre-commit try-repo . zsort --files test/consumer/src/main.zig
 
   package-consumer:
