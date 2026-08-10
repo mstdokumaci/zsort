@@ -193,7 +193,8 @@ pub fn entry(comptime run_main: anytype) type {
 fn collectArgs(allocator: std.mem.Allocator, args: std.process.Args) ![]const []const u8 {
     var list: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer list.deinit(allocator);
-    var it = std.process.Args.Iterator.init(args);
+    var it = try std.process.Args.Iterator.initAllocator(args, allocator);
+    defer it.deinit();
     while (it.next()) |arg| try list.append(allocator, try allocator.dupe(u8, arg));
     return list.toOwnedSlice(allocator);
 }
