@@ -225,6 +225,26 @@ test "processSource: no double blank when rest starts blank" {
     try std.testing.expect(!result.changed);
 }
 
+test "processSource: excessive blanks between block and body are normalized and reported" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\pub fn main() {}
+        \\
+        \\
+        \\const x = 1;
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expect(result.normalized);
+    try std.testing.expectEqualStrings(
+        "const std = @import(\"std\");\n\npub fn main() {}\n\nconst x = 1;",
+        result.new_text,
+    );
+}
+
 test "processSource: doc comment stays attached to the following decl" {
     const source =
         \\const std = @import("std");

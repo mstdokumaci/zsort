@@ -624,6 +624,9 @@ const ProcessResult = struct {
     stray_count: usize,
     /// A blank line was inserted between the sorted block and the body.
     junction_blank: bool = false,
+    /// The collapsed output differs from the pre-collapse text, so the
+    /// change extends beyond the block region and needs a full-text diff.
+    normalized: bool = false,
 };
 
 pub fn processSource(
@@ -783,7 +786,6 @@ pub fn processSource(
         };
     }
 
-    const original_block = source[0..block_end];
     // The sorted block is separated from the body by a blank line unless the
     // block already ends with a blank line or a trailing comment (which stays
     // attached to the decl it documents).
@@ -803,7 +805,6 @@ pub fn processSource(
         scan_pos = le;
     }
     const junction_blank = !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0 and rest[0] != '\n' and rest[0] != '\r';
-    const changed = !std.mem.eql(u8, original_block, new_imports) or stray_imports.items.len > 0 or junction_blank;
 
     const full_new = if (junction_blank)
         try std.mem.concat(allocator, u8, &.{ new_imports, nl, rest })
@@ -812,7 +813,9 @@ pub fn processSource(
     if (rest_owned) |owned| allocator.free(owned);
     errdefer allocator.free(full_new);
     const collapsed = try collapseBlankLines(allocator, full_new, true);
+    const normalized = !std.mem.eql(u8, full_new, collapsed);
     allocator.free(full_new);
+    const changed = !std.mem.eql(u8, source, collapsed);
 
     return .{
         .new_text = collapsed,
@@ -823,6 +826,7 @@ pub fn processSource(
         .banned_msg = banned_msg,
         .stray_count = stray_imports.items.len,
         .junction_blank = junction_blank,
+        .normalized = normalized,
     };
 }
 
@@ -1218,7 +1222,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         } else {
             // The block moved to the end of the file; a block-only diff
             // would show the whole file as moved, so diff the full text.
-            if (parsed.bottom or result.stray_count > 0 or result.junction_blank) {
+            if (parsed.bottom or result.stray_count > 0 or result.junction_blank or result.normalized) {
                 showDiff(io, allocator, file_path, slot.source, result.new_text, color);
             } else {
                 showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block, color);
