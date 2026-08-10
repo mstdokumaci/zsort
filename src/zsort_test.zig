@@ -577,6 +577,12 @@ test "processSource: --bottom preserves CRLF line endings" {
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "pub fn main() !void {}\r\n\r\n" ++
+            "const a = @import(\"a.zig\");\r\n" ++
+            "const b = @import(\"b.zig\");\r\n",
+        result.new_text,
+    );
     var prev: u8 = 0;
     for (result.new_text) |ch| {
         if (ch == '\n') try std.testing.expectEqual(@as(u8, '\r'), prev);
