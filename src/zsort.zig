@@ -8,6 +8,7 @@ const version = @import("version.zig").version;
 
 const Import = ast_scan.Import;
 const findLineEnd = ast_scan.findLineEnd;
+const findLineStart = ast_scan.findLineStart;
 
 /// Emit the comment block attached to a decl (`source[comment_start..imp.start]`),
 /// dropping blank lines: `findCommentStart` walks back over blanks, but a
@@ -157,6 +158,7 @@ pub fn buildSortedImportText(
     sorted_imports: []const Import,
     aliases: []const Import,
     block_end: usize,
+    bottom: bool,
 ) ![]const u8 {
     var preamble_lines: std.ArrayListUnmanaged([]const u8) = .empty;
     defer preamble_lines.deinit(allocator);
@@ -228,16 +230,35 @@ pub fn buildSortedImportText(
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(allocator);
 
-    for (preamble_lines.items) |line| {
-        try buf.appendSlice(allocator, line);
-    }
-    if (preamble_lines.items.len > 0 and buf.items[buf.items.len - 1] != '\n') {
-        try buf.appendSlice(allocator, nl);
+    if (bottom) {
+        // The comment run directly above the first import is attached to it
+        // and travels with the block as its lead; everything above that run
+        // (`//!` docs, detached headers, blanks) stays at the top of the
+        // file, where processSource emits it. The first top-region span has
+        // comment_start == null (its run reaches line 0), so this is the
+        // only place its attached comments are emitted.
+        var first_start: usize = source.len;
+        for (sorted_imports) |imp| first_start = @min(first_start, imp.start);
+        for (aliases) |a| first_start = @min(first_start, a.start);
+        if (first_start < block_end) {
+            const line_start = findLineStart(source, first_start);
+            try buf.appendSlice(allocator, source[attachedCommentHeadStart(source, line_start)..line_start]);
+        }
+    } else {
+        for (preamble_lines.items) |line| {
+            try buf.appendSlice(allocator, line);
+        }
+        if (preamble_lines.items.len > 0 and buf.items[buf.items.len - 1] != '\n') {
+            try buf.appendSlice(allocator, nl);
+        }
     }
 
     try buf.appendSlice(allocator, imports_buf.items);
 
-    if (trailing_comments.items.len > 0) {
+    // In bottom mode the trailing comments stay with the body (processSource
+    // keeps them via the middle pass); only top mode attaches them to the
+    // end of the block, where they sit above the first body decl.
+    if (trailing_comments.items.len > 0 and !bottom) {
         try buf.appendSlice(allocator, nl);
         for (trailing_comments.items) |line| {
             try buf.appendSlice(allocator, line);
@@ -524,6 +545,63 @@ fn hasSkipComment(source: []const u8) bool {
     return false;
 }
 
+/// Start of the contiguous comment run directly above `line_start`: walks up
+/// over `//` lines (excluding `//!`, which document the module and never
+/// travel) and stops at the first blank or non-comment line. The returned
+/// range is attached to the code below; everything above it is detached
+/// header material. Only used by the `--bottom` layout.
+fn attachedCommentHeadStart(source: []const u8, line_start: usize) usize {
+    var pos = line_start;
+    while (pos > 0) {
+        const ls = findLineStart(source, pos - 1);
+        const trimmed = std.mem.trim(u8, source[ls..pos], " \t\r\n");
+        if (std.mem.startsWith(u8, trimmed, "//") and !std.mem.startsWith(u8, trimmed, "//!")) {
+            pos = ls;
+        } else {
+            break;
+        }
+    }
+    return pos;
+}
+
+/// Append the `//`-prefixed lines of `source[start..end]`, dropping blank
+/// lines. Keeps the trailing comments of the import block with the body when
+/// the block itself moves to the end of the file.
+fn appendCommentLines(allocator: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), source: []const u8, start: usize, end: usize) !void {
+    var pos = start;
+    while (pos < end) {
+        const le = findLineEnd(source, pos);
+        const trimmed = std.mem.trimStart(u8, source[pos..le], " \t\r\n");
+        if (std.mem.startsWith(u8, trimmed, "//")) {
+            try buf.appendSlice(allocator, source[pos..le]);
+        }
+        pos = le;
+    }
+}
+
+const SortByStart = struct {
+    fn lt(_: void, a: Import, b: Import) bool {
+        return a.start < b.start;
+    }
+};
+
+/// Remove the stray spans from `source[block_end..]`, appending the gaps to
+/// `buf`: each span's comment window (first non-blank line of its attached
+/// comments) travels with it, while blank lines separating the import from
+/// the code above survive the removal.
+fn removeStrays(allocator: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), source: []const u8, block_end: usize, strays: []const Import) !void {
+    var pos: usize = block_end;
+    for (strays) |imp| {
+        var raw_start = imp.start;
+        if (imp.comment_start) |cs| raw_start = firstNonBlankLineStart(source, cs, imp.start);
+        const removal_start = @max(raw_start, pos);
+        if (imp.end <= pos) continue;
+        try buf.appendSlice(allocator, source[pos..removal_start]);
+        pos = imp.end;
+    }
+    try buf.appendSlice(allocator, source[pos..]);
+}
+
 const ProcessResult = struct {
     new_text: []const u8,
     new_block: []const u8,
@@ -540,6 +618,7 @@ pub fn processSource(
     allocator: std.mem.Allocator,
     source: [:0]const u8,
     banned_prefixes: []const []const u8,
+    bottom: bool,
 ) !ProcessResult {
     if (hasSkipComment(source)) {
         return .{
@@ -587,38 +666,110 @@ pub fn processSource(
             try stray_imports.append(allocator, alias);
         }
     }
+    if (stray_imports.items.len > 0) {
+        std.sort.pdq(Import, stray_imports.items, {}, SortByStart.lt);
+    }
+
+    const nl = detectNewline(source);
 
     var rest: []const u8 = source[block_end..];
     var rest_owned: ?[]const u8 = null;
     errdefer if (rest_owned) |owned| allocator.free(owned);
-    if (stray_imports.items.len > 0) {
-        std.sort.pdq(Import, stray_imports.items, {}, struct {
-            fn lt(_: void, a: Import, b: Import) bool {
-                return a.start < b.start;
+    var top_cut: usize = block_end;
+    if (bottom) {
+        var first_span_line_start: usize = source.len;
+        for (imports) |imp| first_span_line_start = @min(first_span_line_start, findLineStart(source, imp.start));
+        for (aliases) |alias| first_span_line_start = @min(first_span_line_start, findLineStart(source, alias.start));
+
+        // The preamble (//! docs, detached headers, blanks) stays at the top
+        // of the file; the comment run directly above the first import is
+        // attached to it and travels with the block. Trailing blank lines of
+        // the preamble are trimmed — the seam below re-inserts one.
+        top_cut = @min(block_end, attachedCommentHeadStart(source, first_span_line_start));
+        while (top_cut > 0) {
+            const ls = findLineStart(source, top_cut - 1);
+            if (std.mem.trim(u8, source[ls..top_cut], " \t\r\n").len == 0) {
+                top_cut = ls;
+            } else {
+                break;
             }
-        }.lt);
+        }
+
+        var rest_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer rest_buf.deinit(allocator);
+
+        // Drop the top-region spans (with their attached comments), keeping
+        // only comment lines: inter-span blanks were the block's internal
+        // band separation and are rebuilt by the block, while comments after
+        // the last span stay attached to the body decl below them.
+        var top_spans: std.ArrayListUnmanaged(Import) = .empty;
+        defer top_spans.deinit(allocator);
+        for (imports) |imp| {
+            if (imp.start < block_end) try top_spans.append(allocator, imp);
+        }
+        for (aliases) |alias| {
+            if (alias.start < block_end) try top_spans.append(allocator, alias);
+        }
+        if (top_spans.items.len > 0) {
+            std.sort.pdq(Import, top_spans.items, {}, SortByStart.lt);
+            var pos = first_span_line_start;
+            for (top_spans.items) |imp| {
+                var raw_start = imp.start;
+                if (imp.comment_start) |cs| raw_start = firstNonBlankLineStart(source, cs, imp.start);
+                const removal_start = @max(raw_start, pos);
+                if (imp.end <= pos) continue;
+                try appendCommentLines(allocator, &rest_buf, source, pos, removal_start);
+                pos = imp.end;
+            }
+            try appendCommentLines(allocator, &rest_buf, source, pos, block_end);
+        }
+        try removeStrays(allocator, &rest_buf, source, block_end, stray_imports.items);
+        const owned_rest = try rest_buf.toOwnedSlice(allocator);
+        rest_owned = owned_rest;
+        rest = owned_rest;
+    } else if (stray_imports.items.len > 0) {
         var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(allocator);
-        var pos: usize = block_end;
-        for (stray_imports.items) |imp| {
-            // The comment window starts at the first non-blank line so that
-            // blank lines separating the import from the code above survive
-            // the removal instead of being swallowed with it.
-            var raw_start = imp.start;
-            if (imp.comment_start) |cs| raw_start = firstNonBlankLineStart(source, cs, imp.start);
-            const removal_start = @max(raw_start, pos);
-            if (imp.end <= pos) continue;
-            try buf.appendSlice(allocator, source[pos..removal_start]);
-            pos = imp.end;
-        }
-        try buf.appendSlice(allocator, source[pos..]);
-        const owned = try buf.toOwnedSlice(allocator);
-        rest_owned = owned;
-        rest = owned;
+        try removeStrays(allocator, &buf, source, block_end, stray_imports.items);
+        const owned_rest = try buf.toOwnedSlice(allocator);
+        rest_owned = owned_rest;
+        rest = owned_rest;
     }
 
-    const new_imports = try buildSortedImportText(allocator, source, imports, aliases, block_end);
+    const new_imports = try buildSortedImportText(allocator, source, imports, aliases, block_end, bottom);
     errdefer allocator.free(new_imports);
+
+    if (bottom) {
+        // File layout: preamble, body, blank, import block. Exactly one blank
+        // line separates the preamble from the body and the body from the
+        // block; already-blank boundaries are not doubled.
+        var full_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer full_buf.deinit(allocator);
+        try full_buf.appendSlice(allocator, source[0..top_cut]);
+        if (top_cut > 0 and rest.len > 0) try full_buf.appendSlice(allocator, nl);
+        try full_buf.appendSlice(allocator, rest);
+        var junction = false;
+        if (full_buf.items.len > 0 and !endsWithBlankLine(full_buf.items)) {
+            junction = true;
+            // One newline terminates the body's last line, a second one
+            // turns it into the separating blank line.
+            try full_buf.appendSlice(allocator, nl);
+            if (!endsWithBlankLine(full_buf.items)) try full_buf.appendSlice(allocator, nl);
+        }
+        try full_buf.appendSlice(allocator, new_imports);
+        const owned = try full_buf.toOwnedSlice(allocator);
+        if (rest_owned) |owned_rest| allocator.free(owned_rest);
+        return .{
+            .new_text = owned,
+            .new_block = new_imports,
+            .block_end = top_cut,
+            .changed = !std.mem.eql(u8, source, owned),
+            .banned = banned_msg != null,
+            .banned_msg = banned_msg,
+            .stray_count = stray_imports.items.len,
+            .junction_blank = junction,
+        };
+    }
 
     const original_block = source[0..block_end];
     // The sorted block is separated from the body by a blank line unless the
@@ -643,7 +794,7 @@ pub fn processSource(
     const changed = !std.mem.eql(u8, original_block, new_imports) or stray_imports.items.len > 0 or junction_blank;
 
     const full_new = if (junction_blank)
-        try std.mem.concat(allocator, u8, &.{ new_imports, detectNewline(source), rest })
+        try std.mem.concat(allocator, u8, &.{ new_imports, nl, rest })
     else
         try std.mem.concat(allocator, u8, &.{ new_imports, rest });
     if (rest_owned) |owned| allocator.free(owned);
@@ -668,6 +819,7 @@ pub const Args = struct {
     mode: CliMode,
     targets: std.ArrayListUnmanaged([]const u8),
     banned_prefixes: std.ArrayListUnmanaged([]const u8),
+    bottom: bool = false,
     help: bool = false,
     version: bool = false,
 
@@ -687,6 +839,7 @@ pub fn parseArgs(
     var mode: ?CliMode = null;
     var help = false;
     var show_version = false;
+    var bottom = false;
 
     var targets: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer targets.deinit(allocator);
@@ -708,6 +861,8 @@ pub fn parseArgs(
             }
             i += 1;
             try banned_prefixes.append(allocator, args[i]);
+        } else if (std.mem.eql(u8, arg, "--bottom")) {
+            bottom = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             err_msg.* = allocFmt(allocator, "Unknown option '{s}'", .{arg});
             return error.UnexpectedArg;
@@ -730,6 +885,7 @@ pub fn parseArgs(
             .mode = mode orelse .check,
             .targets = targets,
             .banned_prefixes = banned_prefixes,
+            .bottom = bottom,
             .help = help,
             .version = show_version,
         };
@@ -746,6 +902,7 @@ pub fn parseArgs(
         .mode = mode.?,
         .targets = targets,
         .banned_prefixes = banned_prefixes,
+        .bottom = bottom,
     };
 }
 
@@ -811,6 +968,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
             \\
             \\{[0]s}Options:{[1]s}
             \\  {[2]s}--ban-prefix <p>{[1]s}   Reject import paths starting with this prefix (repeatable)
+            \\  {[2]s}--bottom{[1]s}          Place the import block at the end of the file
             \\  {[2]s}-h, --help{[1]s}         Show this help message
             \\  {[2]s}--version{[1]s}          Print version and exit
             \\
@@ -827,6 +985,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
             \\
             \\Options:
             \\  --ban-prefix <p>   Reject import paths starting with this prefix (repeatable)
+            \\  --bottom          Place the import block at the end of the file
             \\  -h, --help         Show this help message
             \\  --version          Print version and exit
             \\
@@ -848,6 +1007,7 @@ const FileJob = struct {
     slot: *JobSlot,
     path: []const u8,
     banned: []const []const u8,
+    bottom: bool,
 };
 
 fn processFileJob(job: *const FileJob, io: compat.Io) void {
@@ -857,7 +1017,7 @@ fn processFileJob(job: *const FileJob, io: compat.Io) void {
         return;
     };
     job.slot.source = source;
-    job.slot.result = processSource(allocator, source, job.banned) catch |err| {
+    job.slot.result = processSource(allocator, source, job.banned, job.bottom) catch |err| {
         job.slot.proc_err = @errorName(err);
         return;
     };
@@ -987,6 +1147,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
             .slot = slot,
             .path = file_path,
             .banned = parsed.banned_prefixes.items,
+            .bottom = parsed.bottom,
         };
     }
 
@@ -1040,7 +1201,9 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
                 printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, esc_path, out_reset });
             }
         } else {
-            if (result.stray_count > 0 or result.junction_blank) {
+            // The block moved to the end of the file; a block-only diff
+            // would show the whole file as moved, so diff the full text.
+            if (parsed.bottom or result.stray_count > 0 or result.junction_blank) {
                 showDiff(io, allocator, file_path, slot.source, result.new_text, color);
             } else {
                 showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block, color);

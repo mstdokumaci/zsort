@@ -75,6 +75,7 @@ Modes:
 
 Options:
   --ban-prefix <p>   Reject imports starting with <p> (repeatable)
+  --bottom           Place the import block at the end of the file
   -h, --help         Show help
   --version          Print version
 ```
@@ -84,6 +85,7 @@ zsort check src/                                  # verify a directory
 zsort fix .                                       # fix everything
 zsort check src/ build.zig                        # mixed targets
 zsort check . --ban-prefix ./ --ban-prefix src/   # ban relative paths
+zsort fix . --bottom                              # imports at the end of the file
 ```
 
 - `check` prints unified diffs for files that need changes.
@@ -141,6 +143,12 @@ const Config = auth.Config;
 - Keeps preceding comments attached to their import
 - Ensures a blank line between the import block and the following code
 - Preserves `//!` doc comments and original line endings (LF / CRLF)
+
+With `--bottom`, the whole block instead moves to the end of the file (the
+layout used by `zig init` templates): `//!` doc comments and comments
+detached by a blank line stay at the top, comments directly attached to an
+import travel with it, and comments after the last import stay with the
+body. The sort order and bands are unchanged.
 
 ## Pre-commit
 
