@@ -75,7 +75,6 @@ fn printStderr(io: compat.Io, comptime fmt: []const u8, args: anytype) void {
 /// `ansi_*` codes are the only intentional raw escape sequences.
 /// Returns `s` unchanged when clean (no allocation). Propagates
 /// `error.OutOfMemory` rather than ever returning the raw input.
-/// ponytail: the five bytes a terminal interprets; tab/DEL are cosmetic only
 pub fn escapeTerm(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
     var n: usize = 0;
     for (s) |b| {
@@ -314,7 +313,6 @@ fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnma
 /// Minimal unified-style diff: trims common prefix/suffix lines and shows the
 /// changed middle with up to two context lines around it. When `use_color` is
 /// set, headers, hunks, and changed lines are ANSI-colored git-style.
-/// ponytail: prefix/suffix diff, switch to Myers if multi-hunk noise ever matters
 pub fn formatUnifiedDiff(
     allocator: std.mem.Allocator,
     file_path: []const u8,
@@ -443,7 +441,6 @@ fn matchesAnyIgnore(path: []const u8, ignores: []const []const u8) bool {
 /// Read `<dir>/.gitignore` and return its cleaned patterns, allocated with
 /// `allocator` (patterns and the slice belong to that allocator).
 /// Missing or unreadable files yield an empty list (not an error).
-/// ponytail: no wildcards or negation; entries match as path-component prefixes
 pub fn loadGitignore(io: compat.Io, allocator: std.mem.Allocator, dir: compat.Dir) ![]const []const u8 {
     const contents = compat.readFileAlloc(io, dir, ".gitignore", allocator, 1024 * 1024) catch return &[_][]const u8{};
     defer allocator.free(contents);
@@ -621,12 +618,10 @@ const ProcessResult = struct {
     changed: bool,
     banned: bool,
     banned_msg: ?[]const u8,
-    stray_count: usize,
-    /// A blank line was inserted between the sorted block and the body.
-    junction_blank: bool = false,
-    /// The collapsed output differs from the pre-collapse text, so the
-    /// change extends beyond the block region and needs a full-text diff.
-    normalized: bool = false,
+    /// The change is not confined to the block region, so check mode must
+    /// diff the full text (block moved, strays hoisted, seam blank inserted,
+    /// or body blanks normalized).
+    full_diff: bool = false,
 };
 
 pub fn processSource(
@@ -643,7 +638,6 @@ pub fn processSource(
             .changed = false,
             .banned = false,
             .banned_msg = null,
-            .stray_count = 0,
         };
     }
 
@@ -665,7 +659,6 @@ pub fn processSource(
             .changed = false,
             .banned = banned_msg != null,
             .banned_msg = banned_msg,
-            .stray_count = 0,
         };
     }
 
@@ -763,9 +756,7 @@ pub fn processSource(
         try full_buf.appendSlice(allocator, source[0..top_cut]);
         if (top_cut > 0 and rest.len > 0) try full_buf.appendSlice(allocator, nl);
         try full_buf.appendSlice(allocator, rest);
-        var junction = false;
         if (full_buf.items.len > 0 and !endsWithBlankLine(full_buf.items)) {
-            junction = true;
             // One newline terminates the body's last line, a second one
             // turns it into the separating blank line.
             try full_buf.appendSlice(allocator, nl);
@@ -781,8 +772,7 @@ pub fn processSource(
             .changed = !std.mem.eql(u8, source, owned),
             .banned = banned_msg != null,
             .banned_msg = banned_msg,
-            .stray_count = stray_imports.items.len,
-            .junction_blank = junction,
+            .full_diff = true,
         };
     }
 
@@ -824,9 +814,7 @@ pub fn processSource(
         .changed = changed,
         .banned = banned_msg != null,
         .banned_msg = banned_msg,
-        .stray_count = stray_imports.items.len,
-        .junction_blank = junction_blank,
-        .normalized = normalized,
+        .full_diff = stray_imports.items.len > 0 or junction_blank or normalized,
     };
 }
 
@@ -1220,9 +1208,9 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
                 printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, esc_path, out_reset });
             }
         } else {
-            // The block moved to the end of the file; a block-only diff
-            // would show the whole file as moved, so diff the full text.
-            if (parsed.bottom or result.stray_count > 0 or result.junction_blank or result.normalized) {
+            // A block-only diff is only valid when the change is confined to
+            // the block region; otherwise diff the full text.
+            if (result.full_diff) {
                 showDiff(io, allocator, file_path, slot.source, result.new_text, color);
             } else {
                 showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block, color);

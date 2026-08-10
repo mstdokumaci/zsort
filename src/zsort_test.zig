@@ -223,6 +223,7 @@ test "processSource: no double blank when rest starts blank" {
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(!result.changed);
+    try std.testing.expect(!result.full_diff);
 }
 
 test "processSource: excessive blanks between block and body are normalized and reported" {
@@ -238,7 +239,7 @@ test "processSource: excessive blanks between block and body are normalized and 
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
-    try std.testing.expect(result.normalized);
+    try std.testing.expect(result.full_diff);
     try std.testing.expectEqualStrings(
         "const std = @import(\"std\");\n\npub fn main() {}\n\nconst x = 1;",
         result.new_text,
@@ -432,6 +433,7 @@ test "processSource: --bottom moves the import block to the end of the file" {
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
+    try std.testing.expect(result.full_diff);
     try std.testing.expectEqualStrings(
         "pub fn main() !void {}\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
         result.new_text,
