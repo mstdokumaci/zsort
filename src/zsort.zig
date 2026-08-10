@@ -75,7 +75,6 @@ fn printStderr(io: compat.Io, comptime fmt: []const u8, args: anytype) void {
 /// `ansi_*` codes are the only intentional raw escape sequences.
 /// Returns `s` unchanged when clean (no allocation). Propagates
 /// `error.OutOfMemory` rather than ever returning the raw input.
-/// ponytail: the five bytes a terminal interprets; tab/DEL are cosmetic only
 pub fn escapeTerm(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
     var n: usize = 0;
     for (s) |b| {
@@ -269,20 +268,32 @@ pub fn buildSortedImportText(
         try buf.appendSlice(allocator, nl);
     }
 
-    var deduped: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer deduped.deinit(allocator);
-    var blank_run: usize = 0;
-    var line_pos: usize = 0;
-    while (line_pos < buf.items.len) {
-        const le = findLineEnd(buf.items, line_pos);
-        const line = buf.items[line_pos..le];
-        const is_blank = std.mem.trim(u8, line, " \t\r\n").len == 0;
-        blank_run = if (is_blank) blank_run + 1 else 0;
-        if (blank_run < 2) try deduped.appendSlice(allocator, line);
-        line_pos = le;
-    }
+    return collapseBlankLines(allocator, buf.items, false);
+}
 
-    return deduped.toOwnedSlice(allocator);
+/// Max one blank line between content lines; when `strip_trailing` is set,
+/// trailing blank lines are removed. Keeps the first line of each blank run
+/// verbatim so CRLF runs survive; blank detection ignores spaces, tabs, and
+/// `\r`.
+fn collapseBlankLines(allocator: std.mem.Allocator, text: []const u8, strip_trailing: bool) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var last_blank_start: ?usize = null;
+    var pos: usize = 0;
+    while (pos < text.len) {
+        const le = findLineEnd(text, pos);
+        const line = text[pos..le];
+        const is_blank = std.mem.trim(u8, line, " \t\r\n").len == 0;
+        if (!is_blank or last_blank_start == null) {
+            try out.appendSlice(allocator, line);
+            last_blank_start = if (is_blank) out.items.len - (le - pos) else null;
+        }
+        pos = le;
+    }
+    if (strip_trailing) {
+        if (last_blank_start) |start| out.shrinkRetainingCapacity(start);
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnmanaged([]const u8) {
@@ -302,7 +313,6 @@ fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnma
 /// Minimal unified-style diff: trims common prefix/suffix lines and shows the
 /// changed middle with up to two context lines around it. When `use_color` is
 /// set, headers, hunks, and changed lines are ANSI-colored git-style.
-/// ponytail: prefix/suffix diff, switch to Myers if multi-hunk noise ever matters
 pub fn formatUnifiedDiff(
     allocator: std.mem.Allocator,
     file_path: []const u8,
@@ -431,7 +441,6 @@ fn matchesAnyIgnore(path: []const u8, ignores: []const []const u8) bool {
 /// Read `<dir>/.gitignore` and return its cleaned patterns, allocated with
 /// `allocator` (patterns and the slice belong to that allocator).
 /// Missing or unreadable files yield an empty list (not an error).
-/// ponytail: no wildcards or negation; entries match as path-component prefixes
 pub fn loadGitignore(io: compat.Io, allocator: std.mem.Allocator, dir: compat.Dir) ![]const []const u8 {
     const contents = compat.readFileAlloc(io, dir, ".gitignore", allocator, 1024 * 1024) catch return &[_][]const u8{};
     defer allocator.free(contents);
@@ -609,9 +618,10 @@ const ProcessResult = struct {
     changed: bool,
     banned: bool,
     banned_msg: ?[]const u8,
-    stray_count: usize,
-    /// A blank line was inserted between the sorted block and the body.
-    junction_blank: bool = false,
+    /// The change is not confined to the block region, so check mode must
+    /// diff the full text (block moved, strays hoisted, seam blank inserted,
+    /// or body blanks normalized).
+    full_diff: bool = false,
 };
 
 pub fn processSource(
@@ -628,7 +638,6 @@ pub fn processSource(
             .changed = false,
             .banned = false,
             .banned_msg = null,
-            .stray_count = 0,
         };
     }
 
@@ -650,7 +659,6 @@ pub fn processSource(
             .changed = false,
             .banned = banned_msg != null,
             .banned_msg = banned_msg,
-            .stray_count = 0,
         };
     }
 
@@ -748,16 +756,14 @@ pub fn processSource(
         try full_buf.appendSlice(allocator, source[0..top_cut]);
         if (top_cut > 0 and rest.len > 0) try full_buf.appendSlice(allocator, nl);
         try full_buf.appendSlice(allocator, rest);
-        var junction = false;
         if (full_buf.items.len > 0 and !endsWithBlankLine(full_buf.items)) {
-            junction = true;
             // One newline terminates the body's last line, a second one
             // turns it into the separating blank line.
             try full_buf.appendSlice(allocator, nl);
             if (!endsWithBlankLine(full_buf.items)) try full_buf.appendSlice(allocator, nl);
         }
         try full_buf.appendSlice(allocator, new_imports);
-        const owned = try full_buf.toOwnedSlice(allocator);
+        const owned = try collapseBlankLines(allocator, full_buf.items, true);
         if (rest_owned) |owned_rest| allocator.free(owned_rest);
         return .{
             .new_text = owned,
@@ -766,12 +772,10 @@ pub fn processSource(
             .changed = !std.mem.eql(u8, source, owned),
             .banned = banned_msg != null,
             .banned_msg = banned_msg,
-            .stray_count = stray_imports.items.len,
-            .junction_blank = junction,
+            .full_diff = true,
         };
     }
 
-    const original_block = source[0..block_end];
     // The sorted block is separated from the body by a blank line unless the
     // block already ends with a blank line or a trailing comment (which stays
     // attached to the decl it documents).
@@ -790,24 +794,27 @@ pub fn processSource(
         if (line.len != 0) break;
         scan_pos = le;
     }
-    const junction_blank = !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0 and rest[0] != '\n' and rest[0] != '\r';
-    const changed = !std.mem.eql(u8, original_block, new_imports) or stray_imports.items.len > 0 or junction_blank;
+    const junction_blank = !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0;
 
     const full_new = if (junction_blank)
         try std.mem.concat(allocator, u8, &.{ new_imports, nl, rest })
     else
         try std.mem.concat(allocator, u8, &.{ new_imports, rest });
     if (rest_owned) |owned| allocator.free(owned);
+    errdefer allocator.free(full_new);
+    const collapsed = try collapseBlankLines(allocator, full_new, true);
+    const normalized = !std.mem.eql(u8, full_new, collapsed);
+    allocator.free(full_new);
+    const changed = !std.mem.eql(u8, source, collapsed);
 
     return .{
-        .new_text = full_new,
+        .new_text = collapsed,
         .new_block = new_imports,
         .block_end = block_end,
         .changed = changed,
         .banned = banned_msg != null,
         .banned_msg = banned_msg,
-        .stray_count = stray_imports.items.len,
-        .junction_blank = junction_blank,
+        .full_diff = stray_imports.items.len > 0 or junction_blank or normalized,
     };
 }
 
@@ -1201,9 +1208,9 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
                 printStdout(io, "  {s}Fixed:{s} {s}{s}{s}\n", .{ out_green, out_reset, out_yellow, esc_path, out_reset });
             }
         } else {
-            // The block moved to the end of the file; a block-only diff
-            // would show the whole file as moved, so diff the full text.
-            if (parsed.bottom or result.stray_count > 0 or result.junction_blank) {
+            // A block-only diff is only valid when the change is confined to
+            // the block region; otherwise diff the full text.
+            if (result.full_diff) {
                 showDiff(io, allocator, file_path, slot.source, result.new_text, color);
             } else {
                 showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block, color);
