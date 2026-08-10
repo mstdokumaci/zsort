@@ -69,7 +69,7 @@ test "buildSortedImportText: basic sort" {
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
 
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
 
     const pos_std = std.mem.indexOf(u8, result, "std") orelse return error.TestUnexpectedResult;
@@ -91,7 +91,7 @@ test "buildSortedImportText: idempotent fix twice" {
     defer imports1.deinit(std.testing.allocator);
     var aliases1 = try collectAliasesForTest(source);
     defer aliases1.deinit(std.testing.allocator);
-    const pass1 = try zsort.buildSortedImportText(std.testing.allocator, source, imports1.items, aliases1.items, block_end1);
+    const pass1 = try zsort.buildSortedImportText(std.testing.allocator, source, imports1.items, aliases1.items, block_end1, false);
     defer std.testing.allocator.free(pass1);
 
     var full1: std.ArrayListUnmanaged(u8) = .empty;
@@ -106,7 +106,7 @@ test "buildSortedImportText: idempotent fix twice" {
     defer imports2.deinit(std.testing.allocator);
     var aliases2 = try collectAliasesForTest(full1_z);
     defer aliases2.deinit(std.testing.allocator);
-    const pass2 = try zsort.buildSortedImportText(std.testing.allocator, full1_z, imports2.items, aliases2.items, block_end2);
+    const pass2 = try zsort.buildSortedImportText(std.testing.allocator, full1_z, imports2.items, aliases2.items, block_end2, false);
     defer std.testing.allocator.free(pass2);
 
     try std.testing.expectEqualStrings(pass1, pass2);
@@ -127,7 +127,7 @@ test "buildSortedImportText: comments separating groups" {
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
 
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
 
     try std.testing.expect(std.mem.indexOf(u8, result, "// Third-party imports") != null);
@@ -180,7 +180,7 @@ test "processSource: hoists multiline stray import intact" {
         \\    "late.zig"
         \\);
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -195,7 +195,7 @@ test "processSource: blank line inserted between block and body" {
         \\
         \\const build_options = @import("build_options");
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -205,7 +205,7 @@ test "processSource: blank line inserted between block and body" {
 
 test "processSource: clean block abutting body gains a blank line" {
     const source = "const std = @import(\"std\");\npub fn main() {}\n";
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -219,7 +219,7 @@ test "processSource: no double blank when rest starts blank" {
         \\
         \\pub fn main() {}
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(!result.changed);
@@ -231,7 +231,7 @@ test "processSource: doc comment stays attached to the following decl" {
         \\/// Docs for the decl.
         \\pub fn main() {}
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -243,7 +243,7 @@ test "processSource: division-deref is not mistaken for a block comment" {
         \\const v = a/*b;
         \\const std = @import("std");
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer if (result.changed) {
         std.testing.allocator.free(result.new_text);
         std.testing.allocator.free(result.new_block);
@@ -263,7 +263,7 @@ test "processSource: blank line before multiline stray import does not invert sl
         \\    "late.zig"
         \\);
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -279,7 +279,7 @@ test "processSource: unterminated import at EOF terminates" {
         \\const late = @import(
         \\    "late.zig"
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -294,7 +294,7 @@ test "processSource: comment above multiline stray import does not invert slice"
         \\    "late.zig"
         \\);
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -308,7 +308,7 @@ test "processSource: import expression ending in brace terminates" {
         \\{
         \\};
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     defer if (result.banned_msg) |msg| std.testing.allocator.free(msg);
@@ -333,7 +333,7 @@ test "hasBannedPatterns: escaped path decoded before prefix check" {
 
 test "processSource: collapses consecutive CRLF blank lines" {
     const source = "// h\r\n\r\n\r\nconst bar = @import(\"bar\");\r\n\r\npub fn main() {}\r\n";
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -345,7 +345,7 @@ test "processSource: skip comment leaves file untouched" {
         \\// zsort: skip
         \\const bar = @import("bar");
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     try std.testing.expect(!result.changed);
     try std.testing.expectEqualStrings(source, result.new_text);
 }
@@ -358,7 +358,7 @@ test "processSource: file-leading //! block stays at top with out-of-order impor
         \\const b = @import("b.zig");
         \\const a = @import("a.zig");
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -376,12 +376,12 @@ test "processSource: idempotent" {
         \\pub fn main() !void {}
         \\const zz = @import("zz.zig");
     ;
-    const r1 = try zsort.processSource(std.testing.allocator, source, &.{});
+    const r1 = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(r1.new_text);
     defer std.testing.allocator.free(r1.new_block);
     const r1_z = try std.testing.allocator.dupeZ(u8, r1.new_text);
     defer std.testing.allocator.free(r1_z);
-    const r2 = try zsort.processSource(std.testing.allocator, r1_z, &.{});
+    const r2 = try zsort.processSource(std.testing.allocator, r1_z, &.{}, false);
     defer std.testing.allocator.free(r2.new_text);
     defer std.testing.allocator.free(r2.new_block);
     try std.testing.expect(!r2.changed);
@@ -390,10 +390,199 @@ test "processSource: idempotent" {
 
 test "processSource: preserves CRLF line endings" {
     const source = "const bar = @import(\"bar\");\r\nconst std = @import(\"std\");\r\n\r\npub fn main() !void {}\r\n";
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
+    var prev: u8 = 0;
+    for (result.new_text) |ch| {
+        if (ch == '\n') try std.testing.expectEqual(@as(u8, '\r'), prev);
+        prev = ch;
+    }
+}
+
+test "processSource: --bottom moves the import block to the end of the file" {
+    const source =
+        \\const b = @import("b.zig");
+        \\const a = @import("a.zig");
+        \\
+        \\pub fn main() !void {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "pub fn main() !void {}\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom is idempotent on an already-bottom file" {
+    const source =
+        \\pub fn main() !void {}
+        \\
+        \\const a = @import("a.zig");
+        \\const b = @import("b.zig");
+        \\
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(!result.changed);
+    try std.testing.expectEqualStrings(source, result.new_text);
+}
+
+test "processSource: --bottom keeps //! docs at the top" {
+    const source =
+        \\//! Module docs.
+        \\const b = @import("b.zig");
+        \\const a = @import("a.zig");
+        \\
+        \\pub fn main() !void {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expectEqualStrings(
+        "//! Module docs.\n\npub fn main() !void {}\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom collapses inter-import blank lines into one seam" {
+    const source =
+        \\//! Module docs.
+        \\
+        \\const b = @import("b.zig");
+        \\
+        \\const a = @import("a.zig");
+        \\
+        \\pub fn main() !void {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expectEqualStrings(
+        "//! Module docs.\n\npub fn main() !void {}\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom hoists mid-file strays into the bottom block" {
+    const source =
+        \\pub fn main() !void {}
+        \\
+        \\const zz = @import("zz.zig");
+        \\const b = @import("b.zig");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "pub fn main() !void {}\n\nconst b = @import(\"b.zig\");\nconst zz = @import(\"zz.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom attached comment travels with its import" {
+    const source =
+        \\pub fn main() !void {}
+        \\
+        \\// wasm support
+        \\const w = @import("w.zig");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expectEqualStrings(
+        "pub fn main() !void {}\n\n// wasm support\nconst w = @import(\"w.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom trailing comment stays with the body" {
+    const source =
+        \\const b = @import("b.zig");
+        \\const a = @import("a.zig");
+        \\// docs for main
+        \\pub fn main() !void {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expectEqualStrings(
+        "// docs for main\npub fn main() !void {}\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom comment adjacent to the first import travels" {
+    const source =
+        \\// attached note
+        \\const b = @import("b.zig");
+        \\const a = @import("a.zig");
+        \\
+        \\pub fn main() !void {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expectEqualStrings(
+        "pub fn main() !void {}\n\n// attached note\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom blank-separated header stays at the top" {
+    const source =
+        \\// header
+        \\
+        \\const b = @import("b.zig");
+        \\const a = @import("a.zig");
+        \\
+        \\pub fn main() !void {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expectEqualStrings(
+        "// header\n\npub fn main() !void {}\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom //! docs stay, adjacent note travels" {
+    const source =
+        \\//! Module docs.
+        \\// note
+        \\const b = @import("b.zig");
+        \\const a = @import("a.zig");
+        \\
+        \\pub fn main() !void {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expectEqualStrings(
+        "//! Module docs.\n\npub fn main() !void {}\n\n// note\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --bottom preserves CRLF line endings" {
+    const source = "const b = @import(\"b.zig\");\r\nconst a = @import(\"a.zig\");\r\n\r\npub fn main() !void {}\r\n";
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "pub fn main() !void {}\r\n\r\n" ++
+            "const a = @import(\"a.zig\");\r\n" ++
+            "const b = @import(\"b.zig\");\r\n",
+        result.new_text,
+    );
     var prev: u8 = 0;
     for (result.new_text) |ch| {
         if (ch == '\n') try std.testing.expectEqual(@as(u8, '\r'), prev);
@@ -642,7 +831,7 @@ test "buildSortedImportText: comment travels with its import" {
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
     const std_pos = std.mem.indexOf(u8, result, "const std") orelse return error.TestUnexpectedResult;
     const bar_pos = std.mem.indexOf(u8, result, "const bar") orelse return error.TestUnexpectedResult;
@@ -665,7 +854,7 @@ test "buildSortedImportText: blank-line-separated comment travels with its impor
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
     const std_pos = std.mem.indexOf(u8, result, "const std") orelse return error.TestUnexpectedResult;
     const comment_pos = std.mem.indexOf(u8, result, "// std comment") orelse return error.TestUnexpectedResult;
@@ -684,7 +873,7 @@ test "buildSortedImportText: alias imports hoisted after imports" {
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
     const bar_pos = std.mem.indexOf(u8, result, "const bar") orelse return error.TestUnexpectedResult;
     const debug_pos = std.mem.indexOf(u8, result, "const Debug = std.debug;") orelse return error.TestUnexpectedResult;
@@ -704,7 +893,7 @@ test "buildSortedImportText: @This() sorts first in the alias band" {
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
     const expected = "const std = @import(\"std\");\n\nconst IP = @This();\nconst Io = std.Io;\n\n";
     try std.testing.expectEqualStrings(expected, result);
@@ -724,7 +913,7 @@ test "buildSortedImportText: full band order with members and aliases" {
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
     const expected =
         \\const std = @import("std");
@@ -754,7 +943,7 @@ test "buildSortedImportText: README example sorts as documented" {
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
     const expected =
         \\const std = @import("std");
@@ -785,7 +974,7 @@ test "buildSortedImportText: aliases sorted by resolved path" {
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
     const expected =
         \\const std = @import("std");
@@ -810,7 +999,7 @@ test "processSource: hoisted stray import lands in its group" {
         \\
         \\const late = @import("late.zig");
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -830,7 +1019,7 @@ test "processSource: alias stranded below block is hoisted into the alias band" 
         \\
         \\pub fn main() {}
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -850,7 +1039,7 @@ test "processSource: blank above hoisted stray import is preserved" {
         \\
         \\pub fn main() {}
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -882,10 +1071,10 @@ test "processSource: output independent of input order" {
         \\
         \\pub fn main() {}
     ;
-    const r1 = try zsort.processSource(std.testing.allocator, forward, &.{});
+    const r1 = try zsort.processSource(std.testing.allocator, forward, &.{}, false);
     defer std.testing.allocator.free(r1.new_text);
     defer std.testing.allocator.free(r1.new_block);
-    const r2 = try zsort.processSource(std.testing.allocator, backward, &.{});
+    const r2 = try zsort.processSource(std.testing.allocator, backward, &.{}, false);
     defer std.testing.allocator.free(r2.new_text);
     defer std.testing.allocator.free(r2.new_block);
     try std.testing.expectEqualStrings(r1.new_text, r2.new_text);
@@ -899,7 +1088,7 @@ test "processSource: stray member import hoisted into member band" {
         \\
         \\const Thing = @import("thing.zig").Thing;
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -949,7 +1138,7 @@ test "processSource: typed import hoisted and sorted" {
         \\
         \\pub fn main() {}
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -968,7 +1157,7 @@ test "processSource: trailing comment on multiline import travels" {
         \\    "late.zig"
         \\); // late comment
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -986,7 +1175,7 @@ test "processSource: cimport block kept intact" {
         \\}); // c trailing
         \\const rest = 1;
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -1009,7 +1198,7 @@ test "processSource: stray cimport hoisted" {
         \\    #include <x.h>
         \\});
     ;
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
@@ -1020,7 +1209,7 @@ test "processSource: stray cimport hoisted" {
 
 test "processSource: comment-only file unchanged" {
     const source = "// just comments\n// more\n";
-    const result = try zsort.processSource(std.testing.allocator, source, &.{});
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
     defer if (result.changed) {
         std.testing.allocator.free(result.new_text);
         std.testing.allocator.free(result.new_block);
@@ -1042,7 +1231,7 @@ test "buildSortedImportText: comment above alias travels" {
     defer imports.deinit(std.testing.allocator);
     var aliases = try collectAliasesForTest(source);
     defer aliases.deinit(std.testing.allocator);
-    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end);
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, imports.items, aliases.items, block_end, false);
     defer std.testing.allocator.free(result);
     const comment_pos = std.mem.indexOf(u8, result, "// Debug alias") orelse return error.TestUnexpectedResult;
     const debug_pos = std.mem.indexOf(u8, result, "const Debug") orelse return error.TestUnexpectedResult;
@@ -1131,6 +1320,24 @@ test "parseArgs: multiple targets" {
     try std.testing.expectEqualStrings("tools", parsed.targets.items[1]);
     try std.testing.expectEqualStrings("src/main.zig", parsed.targets.items[2]);
     try std.testing.expectEqual(@as(usize, 0), parsed.banned_prefixes.items.len);
+}
+
+test "parseArgs: --bottom flag accepted in both modes" {
+    var msg: ?[]const u8 = null;
+    defer if (msg) |m| std.testing.allocator.free(m);
+
+    var check = try zsort.parseArgs(std.testing.allocator, &.{ "zsort", "--bottom", "check", "src" }, &msg);
+    defer check.deinit(std.testing.allocator);
+    try std.testing.expect(check.mode == .check);
+    try std.testing.expect(check.bottom);
+
+    var fix = try zsort.parseArgs(std.testing.allocator, &.{ "zsort", "fix", "src", "--bottom", "--ban-prefix", "./" }, &msg);
+    defer fix.deinit(std.testing.allocator);
+    try std.testing.expect(fix.mode == .fix);
+    try std.testing.expect(fix.bottom);
+    try std.testing.expectEqual(@as(usize, 1), fix.banned_prefixes.items.len);
+
+    try std.testing.expectError(error.UnexpectedArg, zsort.parseArgs(std.testing.allocator, &.{ "zsort", "check", "src", "--bottomx" }, &msg));
 }
 
 test "formatSummary: check mode, plain without color" {

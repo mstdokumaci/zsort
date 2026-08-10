@@ -52,7 +52,7 @@ pub fn classify(path: []const u8) u2 {
     return class_third_party;
 }
 
-fn findLineStart(source: []const u8, pos: usize) usize {
+pub fn findLineStart(source: []const u8, pos: usize) usize {
     var i = pos;
     while (i > 0) : (i -= 1) {
         if (source[i - 1] == '\n') return i;
