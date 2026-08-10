@@ -794,7 +794,7 @@ pub fn processSource(
         if (line.len != 0) break;
         scan_pos = le;
     }
-    const junction_blank = !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0 and rest[0] != '\n' and rest[0] != '\r';
+    const junction_blank = !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0;
 
     const full_new = if (junction_blank)
         try std.mem.concat(allocator, u8, &.{ new_imports, nl, rest })
