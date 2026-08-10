@@ -269,20 +269,32 @@ pub fn buildSortedImportText(
         try buf.appendSlice(allocator, nl);
     }
 
-    var deduped: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer deduped.deinit(allocator);
-    var blank_run: usize = 0;
-    var line_pos: usize = 0;
-    while (line_pos < buf.items.len) {
-        const le = findLineEnd(buf.items, line_pos);
-        const line = buf.items[line_pos..le];
-        const is_blank = std.mem.trim(u8, line, " \t\r\n").len == 0;
-        blank_run = if (is_blank) blank_run + 1 else 0;
-        if (blank_run < 2) try deduped.appendSlice(allocator, line);
-        line_pos = le;
-    }
+    return collapseBlankLines(allocator, buf.items, false);
+}
 
-    return deduped.toOwnedSlice(allocator);
+/// Max one blank line between content lines; when `strip_trailing` is set,
+/// trailing blank lines are removed. Keeps the first line of each blank run
+/// verbatim so CRLF runs survive; blank detection ignores spaces, tabs, and
+/// `\r`.
+fn collapseBlankLines(allocator: std.mem.Allocator, text: []const u8, strip_trailing: bool) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var last_blank_start: ?usize = null;
+    var pos: usize = 0;
+    while (pos < text.len) {
+        const le = findLineEnd(text, pos);
+        const line = text[pos..le];
+        const is_blank = std.mem.trim(u8, line, " \t\r\n").len == 0;
+        if (!is_blank or last_blank_start == null) {
+            try out.appendSlice(allocator, line);
+            last_blank_start = if (is_blank) out.items.len - (le - pos) else null;
+        }
+        pos = le;
+    }
+    if (strip_trailing) {
+        if (last_blank_start) |start| out.shrinkRetainingCapacity(start);
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnmanaged([]const u8) {
@@ -757,7 +769,7 @@ pub fn processSource(
             if (!endsWithBlankLine(full_buf.items)) try full_buf.appendSlice(allocator, nl);
         }
         try full_buf.appendSlice(allocator, new_imports);
-        const owned = try full_buf.toOwnedSlice(allocator);
+        const owned = try collapseBlankLines(allocator, full_buf.items, true);
         if (rest_owned) |owned_rest| allocator.free(owned_rest);
         return .{
             .new_text = owned,
@@ -798,9 +810,12 @@ pub fn processSource(
     else
         try std.mem.concat(allocator, u8, &.{ new_imports, rest });
     if (rest_owned) |owned| allocator.free(owned);
+    errdefer allocator.free(full_new);
+    const collapsed = try collapseBlankLines(allocator, full_new, true);
+    allocator.free(full_new);
 
     return .{
-        .new_text = full_new,
+        .new_text = collapsed,
         .new_block = new_imports,
         .block_end = block_end,
         .changed = changed,
