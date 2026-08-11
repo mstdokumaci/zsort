@@ -15,6 +15,9 @@ pub const class_local: u2 = 2;
 pub const Import = struct {
     start: usize,
     end: usize,
+    /// Resolved import path; for aliases, the full resolved dotted chain
+    /// (`std.mem.Allocator`) used as the alias-band sort key: parents
+    /// before their members, alphabetical per level.
     path: []const u8,
     class: u2,
     stray: bool = false,
@@ -28,9 +31,9 @@ pub const Import = struct {
     /// Full decl text (`source[start..end]`); final sort tiebreak so the
     /// output never depends on input order.
     text: []const u8 = "",
-    /// False when an alias's base name is not a top-level import (e.g. a
-    /// local decl like `system`); such decls are not block members and
-    /// stay in place.
+    /// False when an alias's base name is neither a top-level import nor a
+    /// resolved alias (e.g. a local decl like `system`); such decls are not
+    /// block members and stay in place.
     resolved: bool = true,
 
     fn lessThan(ctx: void, a: Import, b: Import) bool {
@@ -151,24 +154,47 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
     result.allowed = try collectAllowedOffsets(allocator, tree);
 
     // Aliases reference imports by their const name; resolve that name to
-    // the imported path so the alias band sorts by module, not by local
-    // alias. An alias whose base name is not an import (a local decl like
-    // `system`, a struct in the same file) is not an import alias at all:
-    // drop it so it stays in the body. Duplicate const names (broken
-    // file): first match wins.
+    // the full dotted chain (`const Allocator = mem.Allocator` over
+    // `const mem = std.mem` → `std.mem.Allocator`) so the alias band sorts
+    // by chain: parents before their members, alphabetical per level.
+    // Container-scope consts are order-independent, so resolution iterates
+    // to a fixed point. An alias whose base is neither an import nor a
+    // resolved alias (a local decl like `system`, a struct in the same
+    // file) is not an import alias at all: drop it so it stays in the
+    // body. Duplicate const names (broken file): first match wins.
     for (result.aliases.items) |*alias| {
-        const dot = std.mem.indexOfScalar(u8, alias.path, '.') orelse continue;
-        const base = alias.path[0..dot];
-        var matched = false;
-        for (result.imports.items) |imp| {
-            if (std.mem.eql(u8, imp.name, base)) {
-                alias.path = imp.path;
-                alias.class = classify(imp.path);
-                matched = true;
-                break;
+        if (std.mem.indexOfScalar(u8, alias.path, '.') != null) alias.resolved = false;
+    }
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (result.aliases.items) |*alias| {
+            if (alias.resolved) continue;
+            const dot = std.mem.indexOfScalar(u8, alias.path, '.') orelse continue;
+            const base = alias.path[0..dot];
+            const suffix = alias.path[dot..];
+            for (result.imports.items) |imp| {
+                if (std.mem.eql(u8, imp.name, base)) {
+                    alias.path = try std.mem.concat(allocator, u8, &.{ imp.path, suffix });
+                    try result.owned_paths.append(allocator, alias.path);
+                    alias.class = classify(imp.path);
+                    alias.resolved = true;
+                    changed = true;
+                    break;
+                }
+            }
+            if (alias.resolved) continue;
+            for (result.aliases.items) |*other| {
+                if (other.resolved and std.mem.eql(u8, other.name, base)) {
+                    alias.path = try std.mem.concat(allocator, u8, &.{ other.path, suffix });
+                    try result.owned_paths.append(allocator, alias.path);
+                    alias.class = other.class;
+                    alias.resolved = true;
+                    changed = true;
+                    break;
+                }
             }
         }
-        if (!matched) alias.resolved = false;
     }
     var alias_i: usize = 0;
     while (alias_i < result.aliases.items.len) {
@@ -368,6 +394,7 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
             .class = classify(chain[0..dot]),
             .comment_start = comment_start,
             .name = name,
+            .member = member,
             .text = text,
         }, .alias = true };
     }
