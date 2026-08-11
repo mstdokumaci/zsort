@@ -180,6 +180,22 @@ test "analyze: direct identifier alias chain resolves" {
     try std.testing.expectEqual(source.len, analysis.block_end);
 }
 
+test "analyze: direct identifier alias chain resolves regardless of decl order" {
+    const source =
+        \\const C = B;
+        \\const B = A;
+        \\const A = @import("a/b.zig");
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("a/b.zig", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("a/b.zig", analysis.aliases.items[1].path);
+    try std.testing.expectEqual(ast_scan.class_local, analysis.aliases.items[0].class);
+    try std.testing.expectEqual(ast_scan.class_local, analysis.aliases.items[1].class);
+    try std.testing.expectEqual(source.len, analysis.block_end);
+}
+
 test "analyze: alias chain resolves regardless of decl order" {
     const source =
         \\const Allocator = mem.Allocator;
