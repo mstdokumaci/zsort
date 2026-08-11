@@ -10,27 +10,8 @@ const Import = ast_scan.Import;
 const findLineEnd = ast_scan.findLineEnd;
 const findLineStart = ast_scan.findLineStart;
 
-/// Emit the comment block attached to a decl (`source[comment_start..imp.start]`),
-/// dropping blank lines: `findCommentStart` walks back over blanks, but a
-/// blank line must not travel with the decl, or the output would depend on
-/// the input order.
-fn appendCommentBlock(allocator: std.mem.Allocator, buf: *std.ArrayListUnmanaged(u8), block: []const u8) !void {
-    var pos: usize = 0;
-    while (pos < block.len) {
-        const le = findLineEnd(block, pos);
-        const line = block[pos..le];
-        if (std.mem.startsWith(u8, std.mem.trim(u8, line, " \t\r\n"), "//")) {
-            try buf.appendSlice(allocator, line);
-        }
-        pos = le;
-    }
-}
-
-fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ?[]const u8 {
-    return std.fmt.allocPrint(allocator, fmt, args) catch |err| {
-        std.debug.print("zsort: failed to format message: {s}\n", .{@errorName(err)});
-        return null;
-    };
+fn allocFmt(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ![]const u8 {
+    return std.fmt.allocPrint(allocator, fmt, args);
 }
 
 const ansi_reset = "\x1b[0m";
@@ -113,12 +94,12 @@ fn scanBannedPatterns(
     for (analysis.calls.items) |call| {
         const line = std.mem.count(u8, source[0..call.offset], "\n") + 1;
         if (std.mem.indexOfScalar(usize, analysis.allowed.items, call.offset) == null) {
-            return allocFmt(allocator, "inline @import inside a type expression (line {d})", .{line}) orelse return error.OutOfMemory;
+            return try allocFmt(allocator, "inline @import inside a type expression (line {d})", .{line});
         }
         if (call.path) |path| {
             for (banned_prefixes) |prefix| {
                 if (std.mem.startsWith(u8, path, prefix)) {
-                    return allocFmt(allocator, "imports from '{s}' are not allowed (line {d})", .{ prefix, line }) orelse return error.OutOfMemory;
+                    return try allocFmt(allocator, "imports from '{s}' are not allowed (line {d})", .{ prefix, line });
                 }
             }
         }
@@ -216,7 +197,7 @@ pub fn buildSortedImportText(
         }
         prev_group = group;
         if (imp.comment_start) |cs| {
-            try appendCommentBlock(allocator, &imports_buf, source[cs..imp.start]);
+            try appendCommentLines(allocator, &imports_buf, source, cs, imp.start);
         }
         const text = source[imp.start..imp.end];
         const trimmed_import = std.mem.trim(u8, text, " \t\n\r");
@@ -863,7 +844,7 @@ pub fn parseArgs(
             show_version = true;
         } else if (std.mem.eql(u8, arg, "--ban-prefix")) {
             if (i + 1 >= args.len) {
-                err_msg.* = allocFmt(allocator, "--ban-prefix requires a value", .{});
+                err_msg.* = try allocFmt(allocator, "--ban-prefix requires a value", .{});
                 return error.MissingBanValue;
             }
             i += 1;
@@ -871,7 +852,7 @@ pub fn parseArgs(
         } else if (std.mem.eql(u8, arg, "--bottom")) {
             bottom = true;
         } else if (arg.len > 0 and arg[0] == '-') {
-            err_msg.* = allocFmt(allocator, "Unknown option '{s}'", .{arg});
+            err_msg.* = try allocFmt(allocator, "Unknown option '{s}'", .{arg});
             return error.UnexpectedArg;
         } else if (mode == null) {
             if (std.mem.eql(u8, arg, "check")) {
@@ -879,7 +860,7 @@ pub fn parseArgs(
             } else if (std.mem.eql(u8, arg, "fix")) {
                 mode = .fix;
             } else {
-                err_msg.* = allocFmt(allocator, "Unknown mode '{s}'. Expected 'check' or 'fix'", .{arg});
+                err_msg.* = try allocFmt(allocator, "Unknown mode '{s}'. Expected 'check' or 'fix'", .{arg});
                 return error.InvalidMode;
             }
         } else {
@@ -898,11 +879,11 @@ pub fn parseArgs(
         };
     }
     if (mode == null) {
-        err_msg.* = allocFmt(allocator, "Missing mode and target", .{});
+        err_msg.* = try allocFmt(allocator, "Missing mode and target", .{});
         return error.Usage;
     }
     if (targets.items.len == 0) {
-        err_msg.* = allocFmt(allocator, "Missing target", .{});
+        err_msg.* = try allocFmt(allocator, "Missing target", .{});
         return error.Usage;
     }
     return .{
@@ -926,7 +907,7 @@ pub fn formatSummary(
     stats: SummaryStats,
     mode: CliMode,
     use_color: bool,
-) ?[]const u8 {
+) !?[]const u8 {
     const yellow = ansi(use_color, ansi_yellow);
     const red = ansi(use_color, ansi_red);
     const magenta = ansi(use_color, ansi_magenta);
@@ -937,24 +918,24 @@ pub fn formatSummary(
     var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(allocator);
     const head = switch (mode) {
-        .check => allocFmt(allocator, "  Found {s}{d}{s} of {s}{d}{s} {s} to fix", .{ yellow, stats.changed, reset, yellow, stats.files, reset, file_word }) orelse return null,
-        .fix => allocFmt(allocator, "\n  Fixed {s}{d}{s} of {s}{d}{s} {s}", .{ yellow, stats.changed, reset, yellow, stats.files, reset, file_word }) orelse return null,
+        .check => try allocFmt(allocator, "  Found {s}{d}{s} of {s}{d}{s} {s} to fix", .{ yellow, stats.changed, reset, yellow, stats.files, reset, file_word }),
+        .fix => try allocFmt(allocator, "\n  Fixed {s}{d}{s} of {s}{d}{s} {s}", .{ yellow, stats.changed, reset, yellow, stats.files, reset, file_word }),
     };
     defer allocator.free(head);
     out.appendSlice(allocator, head) catch return null;
 
     if (stats.errors > 0) {
-        const seg = allocFmt(allocator, ", {s}{d}{s} failed", .{ red, stats.errors, reset }) orelse return null;
+        const seg = try allocFmt(allocator, ", {s}{d}{s} failed", .{ red, stats.errors, reset });
         defer allocator.free(seg);
         out.appendSlice(allocator, seg) catch return null;
     }
     if (stats.banned > 0) {
-        const seg = allocFmt(allocator, ", {s}{d}{s} banned", .{ magenta, stats.banned, reset }) orelse return null;
+        const seg = try allocFmt(allocator, ", {s}{d}{s} banned", .{ magenta, stats.banned, reset });
         defer allocator.free(seg);
         out.appendSlice(allocator, seg) catch return null;
     }
 
-    const tail = allocFmt(allocator, " in {s}{d}{s}ms.\n", .{ yellow, ms, reset }) orelse return null;
+    const tail = try allocFmt(allocator, " in {s}{d}{s}ms.\n", .{ yellow, ms, reset });
     defer allocator.free(tail);
     out.appendSlice(allocator, tail) catch return null;
     const owned = out.toOwnedSlice(allocator) catch return null;
@@ -962,70 +943,47 @@ pub fn formatSummary(
 }
 
 fn printHelp(io: compat.Io, use_color: bool) void {
-    if (use_color) {
-        const bold = ansi_bold;
-        const yellow = ansi_yellow;
-        const reset = ansi_reset;
-        printStdout(io,
-            \\Usage: zsort [check|fix] <dir|file>... [options]
-            \\
-            \\{[0]s}Modes:{[1]s}
-            \\  {[2]s}check{[1]s}              Verify Zig import ordering; exit code 1 when changes are needed
-            \\  {[2]s}fix{[1]s}                Rewrite files, sorting their imports
-            \\
-            \\{[0]s}Options:{[1]s}
-            \\  {[2]s}--ban-prefix <p>{[1]s}   Reject import paths starting with this prefix (repeatable)
-            \\  {[2]s}--bottom{[1]s}          Place the import block at the end of the file
-            \\  {[2]s}-h, --help{[1]s}         Show this help message
-            \\  {[2]s}--version{[1]s}          Print version and exit
-            \\
-            \\Multiple paths may be given; directories are scanned recursively.
-            \\
-        , .{ bold, reset, yellow });
-    } else {
-        printStdout(io,
-            \\Usage: zsort [check|fix] <dir|file>... [options]
-            \\
-            \\Modes:
-            \\  check              Verify Zig import ordering; exit code 1 when changes are needed
-            \\  fix                Rewrite files, sorting their imports
-            \\
-            \\Options:
-            \\  --ban-prefix <p>   Reject import paths starting with this prefix (repeatable)
-            \\  --bottom          Place the import block at the end of the file
-            \\  -h, --help         Show this help message
-            \\  --version          Print version and exit
-            \\
-            \\Multiple paths may be given; directories are scanned recursively.
-            \\
-        , .{});
-    }
+    const bold = ansi(use_color, ansi_bold);
+    const yellow = ansi(use_color, ansi_yellow);
+    const reset = ansi(use_color, ansi_reset);
+    printStdout(io,
+        \\Usage: zsort [check|fix] <dir|file>... [options]
+        \\
+        \\{[0]s}Modes:{[1]s}
+        \\  {[2]s}check{[1]s}              Verify Zig import ordering; exit code 1 when changes are needed
+        \\  {[2]s}fix{[1]s}                Rewrite files, sorting their imports
+        \\
+        \\{[0]s}Options:{[1]s}
+        \\  {[2]s}--ban-prefix <p>{[1]s}   Reject import paths starting with this prefix (repeatable)
+        \\  {[2]s}--bottom{[1]s}          Place the import block at the end of the file
+        \\  {[2]s}-h, --help{[1]s}         Show this help message
+        \\  {[2]s}--version{[1]s}          Print version and exit
+        \\
+        \\Multiple paths may be given; directories are scanned recursively.
+        \\
+    , .{ bold, reset, yellow });
 }
 
-const JobSlot = struct {
+const FileJob = struct {
     arena: *std.heap.ArenaAllocator,
-    source: []const u8,
+    path: []const u8,
+    banned: []const []const u8,
+    bottom: bool,
+    source: []const u8 = "",
     result: ?ProcessResult = null,
     read_err: ?[]const u8 = null,
     proc_err: ?[]const u8 = null,
 };
 
-const FileJob = struct {
-    slot: *JobSlot,
-    path: []const u8,
-    banned: []const []const u8,
-    bottom: bool,
-};
-
-fn processFileJob(job: *const FileJob, io: compat.Io) void {
-    const allocator = job.slot.arena.allocator();
+fn processFileJob(job: *FileJob, io: compat.Io) void {
+    const allocator = job.arena.allocator();
     const source = compat.readFileAllocZ(io, compat.cwd(), job.path, allocator, 32 * 1024 * 1024) catch |err| {
-        job.slot.read_err = @errorName(err);
+        job.read_err = @errorName(err);
         return;
     };
-    job.slot.source = source;
-    job.slot.result = processSource(allocator, source, job.banned, job.bottom) catch |err| {
-        job.slot.proc_err = @errorName(err);
+    job.source = source;
+    job.result = processSource(allocator, source, job.banned, job.bottom) catch |err| {
+        job.proc_err = @errorName(err);
         return;
     };
 }
@@ -1134,24 +1092,13 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
 
     var timer = try compat.Timer.start(io);
 
-    const slots = try allocator.alloc(JobSlot, files.items.len);
-    defer allocator.free(slots);
-    for (slots) |*slot| {
-        const file_arena = try allocator.create(std.heap.ArenaAllocator);
-        file_arena.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        // SAFETY: source is set by the worker before main reads it; read_err
-        // and proc_err guard every access path.
-        slot.* = .{
-            .arena = file_arena,
-            .source = undefined,
-        };
-    }
-
     const jobs = try allocator.alloc(FileJob, files.items.len);
     defer allocator.free(jobs);
-    for (jobs, slots, files.items) |*job, *slot, file_path| {
+    for (jobs, files.items) |*job, file_path| {
+        const file_arena = try allocator.create(std.heap.ArenaAllocator);
+        file_arena.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         job.* = .{
-            .slot = slot,
+            .arena = file_arena,
             .path = file_path,
             .banned = parsed.banned_prefixes.items,
             .bottom = parsed.bottom,
@@ -1165,28 +1112,27 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
     var banned_count: usize = 0;
 
     for (jobs) |*job| {
-        const slot = job.slot;
-        defer allocator.destroy(slot.arena);
-        defer slot.arena.deinit();
+        defer allocator.destroy(job.arena);
+        defer job.arena.deinit();
         const file_path = job.path;
         const esc_path = try escapeTerm(allocator, file_path);
         defer if (esc_path.ptr != file_path.ptr) allocator.free(esc_path);
 
-        if (slot.read_err) |msg| {
+        if (job.read_err) |msg| {
             const esc_msg = try escapeTerm(allocator, msg);
             defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
             printStderr(io, "  {s}Error reading{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, esc_msg, err_reset });
             error_count += 1;
             continue;
         }
-        if (slot.proc_err) |msg| {
+        if (job.proc_err) |msg| {
             const esc_msg = try escapeTerm(allocator, msg);
             defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
             printStderr(io, "  {s}Error processing{s} {s}{s}{s}: {s}{s}{s}\n", .{ err_red, err_reset, err_yellow, esc_path, err_reset, err_red, esc_msg, err_reset });
             error_count += 1;
             continue;
         }
-        const result = slot.result orelse continue;
+        const result = job.result orelse continue;
         if (result.banned_msg) |msg| {
             const esc_msg = try escapeTerm(allocator, msg);
             defer if (esc_msg.ptr != msg.ptr) allocator.free(esc_msg);
@@ -1211,9 +1157,9 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
             // A block-only diff is only valid when the change is confined to
             // the block region; otherwise diff the full text.
             if (result.full_diff) {
-                showDiff(io, allocator, file_path, slot.source, result.new_text, color);
+                showDiff(io, allocator, file_path, job.source, result.new_text, color);
             } else {
-                showDiff(io, allocator, file_path, slot.source[0..result.block_end], result.new_block, color);
+                showDiff(io, allocator, file_path, job.source[0..result.block_end], result.new_block, color);
             }
         }
     }
@@ -1226,14 +1172,14 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
         .elapsed_ns = timer.read(),
     };
     if (parsed.mode == .check) {
-        if (formatSummary(allocator, stats, .check, color)) |summary| {
+        if (formatSummary(allocator, stats, .check, color) catch null) |summary| {
             printStdout(io, "{s}", .{summary});
         }
         if (changed_count > 0 or error_count > 0 or banned_count > 0) {
             std.process.exit(1);
         }
     } else {
-        if (formatSummary(allocator, stats, .fix, color)) |summary| {
+        if (formatSummary(allocator, stats, .fix, color) catch null) |summary| {
             printStdout(io, "{s}", .{summary});
         }
         if (error_count > 0 or banned_count > 0) std.process.exit(1);
