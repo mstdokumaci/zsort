@@ -145,7 +145,7 @@ pub fn isStderrTty(io: Io) bool {
 }
 
 /// Spawn `function` over `jobs` and wait for all of them. `function` must be
-/// `fn (*const Job, Io) void`; on 0.15 the `Io` argument is `void`.
+/// `fn (*Job, Io) void`; on 0.15 the `Io` argument is `void`.
 pub fn runParallel(io: Io, allocator: std.mem.Allocator, comptime Job: type, comptime function: anytype, jobs: []Job) !void {
     if (is_v016) {
         var g: std.Io.Group = .init;

@@ -6,12 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-11
+
 ### Added
 
 - `--bottom` flag places the entire import block (imports, aliases, and
   their attached comments) at the end of the file, keeping `//!` doc
   comments and detached header comments at the top; works with both
   `check` and `fix`
+
+### Fixed
+
+- alias chains now resolve fully: a multi-hop chain
+  (`const B = A; const C = B;`) sorts by its ultimate target regardless of
+  declaration order, and cyclic or unresolvable chains are excluded from
+  the import block instead of being mis-sorted
+- aliases sort correctly relative to their targets when both are in the
+  import block
 
 ## [0.6.0] - 2026-08-05
 

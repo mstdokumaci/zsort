@@ -1702,86 +1702,86 @@ test "parseArgs: --bottom flag accepted in both modes" {
 }
 
 test "formatSummary: check mode, plain without color" {
-    const s = zsort.formatSummary(std.testing.allocator, .{
+    const s = (try zsort.formatSummary(std.testing.allocator, .{
         .changed = 1,
         .errors = 2,
         .banned = 0,
         .files = 179,
         .elapsed_ns = 12 * std.time.ns_per_ms,
-    }, .check, false) orelse return error.TestUnexpectedResult;
+    }, .check, false)) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
     try std.testing.expectEqualStrings("  Found 1 of 179 files to fix, 2 failed in 12ms.\n", s);
 }
 
 test "formatSummary: fix mode, plain without color" {
-    const s = zsort.formatSummary(std.testing.allocator, .{
+    const s = (try zsort.formatSummary(std.testing.allocator, .{
         .changed = 0,
         .errors = 0,
         .banned = 0,
         .files = 179,
         .elapsed_ns = 500_000,
-    }, .fix, false) orelse return error.TestUnexpectedResult;
+    }, .fix, false)) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
     try std.testing.expectEqualStrings("\n  Fixed 0 of 179 files in 0ms.\n", s);
 }
 
 test "formatSummary: colorized per-category numbers, sub-ms truncates to 0ms" {
-    const s = zsort.formatSummary(std.testing.allocator, .{
+    const s = (try zsort.formatSummary(std.testing.allocator, .{
         .changed = 0,
         .errors = 0,
         .banned = 0,
         .files = 179,
         .elapsed_ns = 500_000,
-    }, .check, true) orelse return error.TestUnexpectedResult;
+    }, .check, true)) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
     try std.testing.expectEqualStrings("  Found \x1b[33m0\x1b[0m of \x1b[33m179\x1b[0m files to fix in \x1b[33m0\x1b[0mms.\n", s);
     try std.testing.expect(std.mem.indexOf(u8, s, "\x1b[") != null);
 }
 
 test "formatSummary: no escape bytes when color disabled" {
-    const s = zsort.formatSummary(std.testing.allocator, .{
+    const s = (try zsort.formatSummary(std.testing.allocator, .{
         .changed = 0,
         .errors = 0,
         .banned = 0,
         .files = 1,
         .elapsed_ns = 0,
-    }, .check, false) orelse return error.TestUnexpectedResult;
+    }, .check, false)) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
     try std.testing.expect(std.mem.indexOf(u8, s, "\x1b[") == null);
 }
 
 test "formatSummary: single-file target uses singular 'file'" {
-    const s = zsort.formatSummary(std.testing.allocator, .{
+    const s = (try zsort.formatSummary(std.testing.allocator, .{
         .changed = 1,
         .errors = 0,
         .banned = 0,
         .files = 1,
         .elapsed_ns = 2 * std.time.ns_per_ms,
-    }, .check, false) orelse return error.TestUnexpectedResult;
+    }, .check, false)) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
     try std.testing.expectEqualStrings("  Found 1 of 1 file to fix in 2ms.\n", s);
 }
 
 test "formatSummary: banned-only segment shown, failed omitted" {
-    const s = zsort.formatSummary(std.testing.allocator, .{
+    const s = (try zsort.formatSummary(std.testing.allocator, .{
         .changed = 1,
         .errors = 0,
         .banned = 3,
         .files = 4,
         .elapsed_ns = 0,
-    }, .check, true) orelse return error.TestUnexpectedResult;
+    }, .check, true)) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
     try std.testing.expectEqualStrings("  Found \x1b[33m1\x1b[0m of \x1b[33m4\x1b[0m files to fix, \x1b[35m3\x1b[0m banned in \x1b[33m0\x1b[0mms.\n", s);
 }
 
 test "formatSummary: failed and banned segments both shown in order" {
-    const s = zsort.formatSummary(std.testing.allocator, .{
+    const s = (try zsort.formatSummary(std.testing.allocator, .{
         .changed = 1,
         .errors = 2,
         .banned = 3,
         .files = 4,
         .elapsed_ns = 5 * std.time.ns_per_ms,
-    }, .check, false) orelse return error.TestUnexpectedResult;
+    }, .check, false)) orelse return error.TestUnexpectedResult;
     defer std.testing.allocator.free(s);
     try std.testing.expectEqualStrings("  Found 1 of 4 files to fix, 2 failed, 3 banned in 5ms.\n", s);
 }

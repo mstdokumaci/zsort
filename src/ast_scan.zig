@@ -15,9 +15,7 @@ pub const class_local: u2 = 2;
 pub const Import = struct {
     start: usize,
     end: usize,
-    /// Resolved import path; for aliases, the full resolved dotted chain
-    /// (`std.mem.Allocator`) used as the alias-band sort key: parents
-    /// before their members, alphabetical per level.
+    /// Resolved import path; for aliases, the full resolved dotted chain.
     path: []const u8,
     class: u2,
     stray: bool = false,
@@ -31,9 +29,8 @@ pub const Import = struct {
     /// Full decl text (`source[start..end]`); final sort tiebreak so the
     /// output never depends on input order.
     text: []const u8 = "",
-    /// False when an alias's base name is neither a top-level import nor a
-    /// resolved alias (e.g. a local decl like `system`); such decls are not
-    /// block members and stay in place.
+    /// False when the base name is neither an import nor a resolved alias
+    /// (a local decl); such aliases are dropped from the band.
     resolved: bool = true,
 
     fn lessThan(ctx: void, a: Import, b: Import) bool {
@@ -153,15 +150,9 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
     result.calls = try importCalls(allocator, &result.owned_paths, tree);
     result.allowed = try collectAllowedOffsets(allocator, tree);
 
-    // Aliases reference imports by their const name; resolve that name to
-    // the full dotted chain (`const Allocator = mem.Allocator` over
-    // `const mem = std.mem` → `std.mem.Allocator`) so the alias band sorts
-    // by chain: parents before their members, alphabetical per level.
-    // Container-scope consts are order-independent, so resolution iterates
-    // to a fixed point. An alias whose base is neither an import nor a
-    // resolved alias (a local decl like `system`, a struct in the same
-    // file) is not an import alias at all: drop it so it stays in the
-    // body. Duplicate const names (broken file): first match wins.
+    // Resolve alias bases to full dotted chains via import/alias names so
+    // the alias band sorts by chain. Container consts are order-independent,
+    // so this iterates to a fixed point; unresolvable bases are dropped.
     for (result.aliases.items) |*alias| {
         if (std.mem.indexOfScalar(u8, alias.path, '.') != null) alias.resolved = false;
     }
@@ -170,9 +161,9 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
         changed = false;
         for (result.aliases.items) |*alias| {
             if (alias.resolved) continue;
-            const dot = std.mem.indexOfScalar(u8, alias.path, '.') orelse continue;
-            const base = alias.path[0..dot];
-            const suffix = alias.path[dot..];
+            const dot = std.mem.indexOfScalar(u8, alias.path, '.');
+            const base = if (dot) |d| alias.path[0..d] else alias.path;
+            const suffix = if (dot) |d| alias.path[d..] else "";
             for (result.imports.items) |imp| {
                 if (std.mem.eql(u8, imp.name, base)) {
                     alias.path = try std.mem.concat(allocator, u8, &.{ imp.path, suffix });
@@ -203,8 +194,7 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
         } else alias_i += 1;
     }
 
-    // The block ends at the first line not covered by a collected span;
-    // dropping unresolvable aliases may shorten the region.
+    // Dropping unresolvable aliases may shorten the block region.
     result.block_end = lineBlockEnd(source, result.imports.items, result.aliases.items);
 
     // Aliases below the block are marked stray so they can be hoisted into
@@ -378,6 +368,22 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
             .class = class_std_builtin,
             .comment_start = comment_start,
             .name = name,
+            .text = text,
+        }, .alias = true };
+    }
+
+    if (tree.nodeTag(init) == .identifier) {
+        // Direct alias to an import or alias name (`const B = A;`): the
+        // fixed-point resolver below rewrites the path to its target's
+        // resolved chain, or drops it if the base never resolves.
+        return .{ .imp = .{
+            .start = start,
+            .end = end,
+            .path = base_slice,
+            .class = classify(base_slice),
+            .comment_start = comment_start,
+            .name = name,
+            .resolved = false,
             .text = text,
         }, .alias = true };
     }
