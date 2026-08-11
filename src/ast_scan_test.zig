@@ -92,7 +92,7 @@ test "analyze: chained member import path is base" {
     try std.testing.expectEqualStrings("a.zig", analysis.imports.items[0].path);
 }
 
-test "analyze: alias resolves to import path" {
+test "analyze: alias resolves to its full chain" {
     const source =
         \\const connection_state = @import("connection/state.zig");
         \\const Connection = connection_state.Connection;
@@ -100,11 +100,11 @@ test "analyze: alias resolves to import path" {
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
-    try std.testing.expectEqualStrings("connection/state.zig", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("connection/state.zig.Connection", analysis.aliases.items[0].path);
     try std.testing.expectEqual(ast_scan.class_local, analysis.aliases.items[0].class);
 }
 
-test "analyze: alias to std resolves to std" {
+test "analyze: alias to std resolves to its chain" {
     const source =
         \\const std = @import("std");
         \\const Debug = std.debug;
@@ -112,7 +112,7 @@ test "analyze: alias to std resolves to std" {
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
-    try std.testing.expectEqualStrings("std", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("std.debug", analysis.aliases.items[0].path);
     try std.testing.expectEqual(ast_scan.class_std_builtin, analysis.aliases.items[0].class);
 }
 
@@ -124,7 +124,7 @@ test "analyze: alias to member import resolves" {
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
-    try std.testing.expectEqualStrings("message_handler.zig", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("message_handler.zig.Config", analysis.aliases.items[0].path);
 }
 
 test "analyze: alias to an alias base resolves" {
@@ -136,8 +136,9 @@ test "analyze: alias to an alias base resolves" {
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 2), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("std.mem", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("std.mem.Allocator", analysis.aliases.items[1].path);
     for (analysis.aliases.items) |alias| {
-        try std.testing.expectEqualStrings("std", alias.path);
         try std.testing.expectEqual(ast_scan.class_std_builtin, alias.class);
         try std.testing.expect(alias.member);
     }
@@ -154,8 +155,10 @@ test "analyze: multi-hop alias chain resolves" {
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 3), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("std.mem", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("std.mem.fmt", analysis.aliases.items[1].path);
+    try std.testing.expectEqualStrings("std.mem.fmt.Writer", analysis.aliases.items[2].path);
     for (analysis.aliases.items) |alias| {
-        try std.testing.expectEqualStrings("std", alias.path);
         try std.testing.expectEqual(ast_scan.class_std_builtin, alias.class);
     }
     try std.testing.expectEqual(source.len, analysis.block_end);
@@ -170,8 +173,9 @@ test "analyze: alias chain resolves regardless of decl order" {
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 2), analysis.aliases.items.len);
+    try std.testing.expectEqualStrings("std.mem", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("std.mem.Allocator", analysis.aliases.items[1].path);
     for (analysis.aliases.items) |alias| {
-        try std.testing.expectEqualStrings("std", alias.path);
         try std.testing.expectEqual(ast_scan.class_std_builtin, alias.class);
     }
     try std.testing.expectEqual(source.len, analysis.block_end);
@@ -205,7 +209,7 @@ test "analyze: alias with unresolvable base is not collected" {
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
-    try std.testing.expectEqualStrings("std", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("std.debug", analysis.aliases.items[0].path);
     try std.testing.expectEqual("const std = @import(\"std\");\n".len, analysis.block_end);
 }
 
@@ -248,7 +252,7 @@ test "analyze: alias resolves with tab-separated decl name" {
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
-    try std.testing.expectEqualStrings("a", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("a.Y", analysis.aliases.items[0].path);
 }
 
 test "analyze: escaped import path is decoded" {

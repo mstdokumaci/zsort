@@ -15,6 +15,9 @@ pub const class_local: u2 = 2;
 pub const Import = struct {
     start: usize,
     end: usize,
+    /// Resolved import path; for aliases, the full resolved dotted chain
+    /// (`std.mem.Allocator`) used as the alias-band sort key: parents
+    /// before their members, alphabetical per level.
     path: []const u8,
     class: u2,
     stray: bool = false,
@@ -151,14 +154,14 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
     result.allowed = try collectAllowedOffsets(allocator, tree);
 
     // Aliases reference imports by their const name; resolve that name to
-    // the imported path so the alias band sorts by module, not by local
-    // alias. A base may itself be an alias (`const Allocator = mem.Allocator`
-    // over `const mem = std.mem`); container-scope consts are
-    // order-independent, so resolution iterates to a fixed point. An alias
-    // whose base is neither an import nor a resolved alias (a local decl
-    // like `system`, a struct in the same file) is not an import alias at
-    // all: drop it so it stays in the body. Duplicate const names (broken
-    // file): first match wins.
+    // the full dotted chain (`const Allocator = mem.Allocator` over
+    // `const mem = std.mem` → `std.mem.Allocator`) so the alias band sorts
+    // by chain: parents before their members, alphabetical per level.
+    // Container-scope consts are order-independent, so resolution iterates
+    // to a fixed point. An alias whose base is neither an import nor a
+    // resolved alias (a local decl like `system`, a struct in the same
+    // file) is not an import alias at all: drop it so it stays in the
+    // body. Duplicate const names (broken file): first match wins.
     for (result.aliases.items) |*alias| {
         if (std.mem.indexOfScalar(u8, alias.path, '.') != null) alias.resolved = false;
     }
@@ -169,9 +172,11 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
             if (alias.resolved) continue;
             const dot = std.mem.indexOfScalar(u8, alias.path, '.') orelse continue;
             const base = alias.path[0..dot];
+            const suffix = alias.path[dot..];
             for (result.imports.items) |imp| {
                 if (std.mem.eql(u8, imp.name, base)) {
-                    alias.path = imp.path;
+                    alias.path = try std.mem.concat(allocator, u8, &.{ imp.path, suffix });
+                    try result.owned_paths.append(allocator, alias.path);
                     alias.class = classify(imp.path);
                     alias.resolved = true;
                     changed = true;
@@ -181,7 +186,8 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
             if (alias.resolved) continue;
             for (result.aliases.items) |*other| {
                 if (other.resolved and std.mem.eql(u8, other.name, base)) {
-                    alias.path = other.path;
+                    alias.path = try std.mem.concat(allocator, u8, &.{ other.path, suffix });
+                    try result.owned_paths.append(allocator, alias.path);
                     alias.class = other.class;
                     alias.resolved = true;
                     changed = true;

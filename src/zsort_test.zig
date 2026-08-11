@@ -1222,11 +1222,11 @@ test "processSource: alias to alias base lands in the alias band (bottom)" {
         \\
         \\const std = @import("std");
         \\
-        \\const Allocator = mem.Allocator;
         \\const Io = std.Io;
         \\const assert = std.debug.assert;
         \\const log = std.log;
         \\const mem = std.mem;
+        \\const Allocator = mem.Allocator;
         \\
     ;
     const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
