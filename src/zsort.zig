@@ -1094,18 +1094,27 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
 
     const jobs = try allocator.alloc(FileJob, files.items.len);
     defer allocator.free(jobs);
-    for (jobs, files.items) |*job, file_path| {
-        const file_arena = try allocator.create(std.heap.ArenaAllocator);
-        file_arena.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        job.* = .{
-            .arena = file_arena,
-            .path = file_path,
-            .banned = parsed.banned_prefixes.items,
-            .bottom = parsed.bottom,
+    {
+        var initialized: usize = 0;
+        errdefer for (jobs[0..initialized]) |*job| {
+            job.arena.deinit();
+            allocator.destroy(job.arena);
         };
-    }
 
-    try compat.runParallel(io, allocator, FileJob, processFileJob, jobs);
+        for (jobs, files.items) |*job, file_path| {
+            const file_arena = try allocator.create(std.heap.ArenaAllocator);
+            file_arena.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            job.* = .{
+                .arena = file_arena,
+                .path = file_path,
+                .banned = parsed.banned_prefixes.items,
+                .bottom = parsed.bottom,
+            };
+            initialized += 1;
+        }
+
+        try compat.runParallel(io, allocator, FileJob, processFileJob, jobs);
+    }
 
     var changed_count: usize = 0;
     var fixed_count: usize = 0;

@@ -161,9 +161,9 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
         changed = false;
         for (result.aliases.items) |*alias| {
             if (alias.resolved) continue;
-            const dot = std.mem.indexOfScalar(u8, alias.path, '.') orelse continue;
-            const base = alias.path[0..dot];
-            const suffix = alias.path[dot..];
+            const dot = std.mem.indexOfScalar(u8, alias.path, '.');
+            const base = if (dot) |d| alias.path[0..d] else alias.path;
+            const suffix = if (dot) |d| alias.path[d..] else "";
             for (result.imports.items) |imp| {
                 if (std.mem.eql(u8, imp.name, base)) {
                     alias.path = try std.mem.concat(allocator, u8, &.{ imp.path, suffix });
@@ -368,6 +368,22 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
             .class = class_std_builtin,
             .comment_start = comment_start,
             .name = name,
+            .text = text,
+        }, .alias = true };
+    }
+
+    if (tree.nodeTag(init) == .identifier) {
+        // Direct alias to an import or alias name (`const B = A;`): the
+        // fixed-point resolver below rewrites the path to its target's
+        // resolved chain, or drops it if the base never resolves.
+        return .{ .imp = .{
+            .start = start,
+            .end = end,
+            .path = base_slice,
+            .class = classify(base_slice),
+            .comment_start = comment_start,
+            .name = name,
+            .resolved = false,
             .text = text,
         }, .alias = true };
     }
