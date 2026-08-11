@@ -32,16 +32,13 @@ test "findImportBlockEnd: ends at first non-import" {
     try std.testing.expectEqual("const std = @import(\"std\");\n\n".len, blockEndForTest(source));
 }
 
-test "findImportBlockEnd: alias to struct-like module does not end block" {
+test "findImportBlockEnd: alias to unimported module ends the block" {
     const source =
         \\const std = @import("std");
         \\const Enum = enums.Kind;
         \\const Other = @import("other");
     ;
-    try std.testing.expectEqual(
-        "const std = @import(\"std\");\nconst Enum = enums.Kind;\nconst Other = @import(\"other\");".len,
-        blockEndForTest(source),
-    );
+    try std.testing.expectEqual("const std = @import(\"std\");\n".len, blockEndForTest(source));
 }
 
 test "collectImports: braces in multiline-string line don't affect depth" {
@@ -130,12 +127,43 @@ test "analyze: alias to member import resolves" {
     try std.testing.expectEqualStrings("message_handler.zig", analysis.aliases.items[0].path);
 }
 
-test "analyze: unresolvable alias keeps chain text" {
+test "analyze: unresolvable alias is not collected" {
     const source = "const Len = Internal.len;\n";
     var analysis = try ast_scan.analyze(std.testing.allocator, source);
     defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
+}
+
+test "analyze: alias with unresolvable base is not collected" {
+    const source =
+        \\const std = @import("std");
+        \\const AF = system.AF;
+        \\const Debug = std.debug;
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), analysis.aliases.items.len);
-    try std.testing.expectEqualStrings("Internal.len", analysis.aliases.items[0].path);
+    try std.testing.expectEqualStrings("std", analysis.aliases.items[0].path);
+    try std.testing.expectEqual("const std = @import(\"std\");\n".len, analysis.block_end);
+}
+
+test "analyze: address-of import chain collected as member import" {
+    const source = "const step_list = &@import(\"root\").step_list;\n";
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), analysis.imports.items.len);
+    try std.testing.expect(analysis.imports.items[0].member);
+    try std.testing.expectEqualStrings("root", analysis.imports.items[0].path);
+    try std.testing.expectEqual(ast_scan.class_local, analysis.imports.items[0].class);
+}
+
+test "analyze: address-of of a local identifier is not an alias" {
+    const source = "const p = &foo;\n";
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
 }
 
 test "analyze: call-result chain is not an alias" {

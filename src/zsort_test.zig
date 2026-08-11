@@ -1034,6 +1034,7 @@ test "buildSortedImportText: blank-line-separated comment travels with its impor
 test "buildSortedImportText: alias imports hoisted after imports" {
     const source =
         \\const bar = @import("bar");
+        \\const std = @import("std");
         \\const Debug = std.debug;
         \\
         \\const rest = 1;
@@ -1268,6 +1269,154 @@ test "processSource: stray member import hoisted into member band" {
     try std.testing.expect(std.mem.indexOf(u8, result.new_text, "pub fn main") != null);
 }
 
+test "processSource: re-export of a local module stays in place" {
+    const source =
+        \\const std = @import("std");
+        \\const Debug = std.debug;
+        \\const system = struct {
+        \\    pub const AF = 1;
+        \\};
+        \\
+        \\pub const AF = system.AF;
+        \\
+        \\const mem = std.mem;
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "pub const AF = system.AF;"));
+    const mem_pos = std.mem.indexOf(u8, result.new_text, "const mem = std.mem;") orelse return error.TestUnexpectedResult;
+    const system_pos = std.mem.indexOf(u8, result.new_text, "const system = struct") orelse return error.TestUnexpectedResult;
+    const af_pos = std.mem.indexOf(u8, result.new_text, "pub const AF = system.AF;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(mem_pos < system_pos);
+    try std.testing.expect(system_pos < af_pos);
+}
+
+test "processSource: --bottom keeps re-export of a local module in place" {
+    const source =
+        \\const std = @import("std");
+        \\const Debug = std.debug;
+        \\const system = struct {
+        \\    pub const AF = 1;
+        \\};
+        \\
+        \\pub const AF = system.AF;
+        \\
+        \\const mem = std.mem;
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result.new_text, "pub const AF = system.AF;"));
+    const af_pos = std.mem.indexOf(u8, result.new_text, "pub const AF = system.AF;") orelse return error.TestUnexpectedResult;
+    const std_pos = std.mem.indexOf(u8, result.new_text, "const std = @import") orelse return error.TestUnexpectedResult;
+    const system_pos = std.mem.indexOf(u8, result.new_text, "const system = struct") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(system_pos < af_pos);
+    try std.testing.expect(af_pos < std_pos);
+}
+
+test "processSource: pub re-export with resolvable base still sorted" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\pub fn main() {}
+        \\
+        \\pub const Debug = std.debug;
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    const debug_pos = std.mem.indexOf(u8, result.new_text, "pub const Debug") orelse return error.TestUnexpectedResult;
+    const main_pos = std.mem.indexOf(u8, result.new_text, "pub fn main") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(debug_pos < main_pos);
+}
+
+test "processSource: pub import still sorted" {
+    const source =
+        \\const bar = @import("bar");
+        \\
+        \\pub fn main() {}
+        \\
+        \\pub const BitStack = @import("BitStack.zig");
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    const bit_pos = std.mem.indexOf(u8, result.new_text, "pub const BitStack") orelse return error.TestUnexpectedResult;
+    const bar_pos = std.mem.indexOf(u8, result.new_text, "const bar") orelse return error.TestUnexpectedResult;
+    const main_pos = std.mem.indexOf(u8, result.new_text, "pub fn main") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(bar_pos < bit_pos);
+    try std.testing.expect(bit_pos < main_pos);
+}
+
+test "processSource: address-of import chain sorted into member band" {
+    const source =
+        \\const step_list = &@import("root").step_list;
+        \\const fmtEscapeHtml = @import("root").fmtEscapeHtml;
+        \\const std = @import("std");
+        \\
+        \\pub fn main() {}
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, false);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    const std_pos = std.mem.indexOf(u8, result.new_text, "const std = @import") orelse return error.TestUnexpectedResult;
+    const fmt_pos = std.mem.indexOf(u8, result.new_text, "const fmtEscapeHtml") orelse return error.TestUnexpectedResult;
+    const step_pos = std.mem.indexOf(u8, result.new_text, "const step_list") orelse return error.TestUnexpectedResult;
+    const main_pos = std.mem.indexOf(u8, result.new_text, "pub fn main") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std_pos < fmt_pos);
+    try std.testing.expect(fmt_pos < step_pos);
+    try std.testing.expect(step_pos < main_pos);
+    try std.testing.expect(std.mem.indexOf(u8, result.new_text, "const fmtEscapeHtml = @import(\"root\").fmtEscapeHtml;\nconst step_list = &@import(\"root\").step_list;") != null);
+}
+
+test "hasBannedPatterns: address-of import chain is allowed" {
+    const source = "const step_list = &@import(\"root\").step_list;\n";
+    try std.testing.expectEqual(@as(?[]const u8, null), try zsort.hasBannedPatterns(std.testing.allocator, source, &.{}));
+}
+
+test "processSource: posix-style re-export block untouched and idempotent" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\const system = struct {
+        \\    pub const AF = 1;
+        \\    pub const E = 2;
+        \\};
+        \\
+        \\pub const AF = system.AF;
+        \\pub const E = system.E;
+        \\
+        \\pub fn main() {}
+    ;
+    for ([_]bool{ false, true }) |bottom| {
+        const r1 = try zsort.processSource(std.testing.allocator, source, &.{}, bottom);
+        defer std.testing.allocator.free(r1.new_text);
+        defer std.testing.allocator.free(r1.new_block);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, r1.new_text, "pub const AF = system.AF;"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, r1.new_text, "pub const E = system.E;"));
+        const system_pos = std.mem.indexOf(u8, r1.new_text, "const system = struct") orelse return error.TestUnexpectedResult;
+        const af_pos = std.mem.indexOf(u8, r1.new_text, "pub const AF = system.AF;") orelse return error.TestUnexpectedResult;
+        const e_pos = std.mem.indexOf(u8, r1.new_text, "pub const E = system.E;") orelse return error.TestUnexpectedResult;
+        const main_pos = std.mem.indexOf(u8, r1.new_text, "pub fn main") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(system_pos < af_pos);
+        try std.testing.expect(af_pos < e_pos);
+        try std.testing.expect(e_pos < main_pos);
+
+        const r1_z = try std.testing.allocator.dupeZ(u8, r1.new_text);
+        defer std.testing.allocator.free(r1_z);
+        const r2 = try zsort.processSource(std.testing.allocator, r1_z, &.{}, bottom);
+        defer std.testing.allocator.free(r2.new_text);
+        defer std.testing.allocator.free(r2.new_block);
+        try std.testing.expect(!r2.changed);
+    }
+}
+
 test "hasBannedPatterns: nested re-export import not banned" {
     const source =
         \\const lib = struct {
@@ -1391,6 +1540,7 @@ test "processSource: comment-only file unchanged" {
 test "buildSortedImportText: comment above alias travels" {
     const source =
         \\const bar = @import("bar");
+        \\const std = @import("std");
         \\// Debug alias
         \\const Debug = std.debug;
         \\

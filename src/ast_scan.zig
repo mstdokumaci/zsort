@@ -28,6 +28,10 @@ pub const Import = struct {
     /// Full decl text (`source[start..end]`); final sort tiebreak so the
     /// output never depends on input order.
     text: []const u8 = "",
+    /// False when an alias's base name is not a top-level import (e.g. a
+    /// local decl like `system`); such decls are not block members and
+    /// stay in place.
+    resolved: bool = true,
 
     fn lessThan(ctx: void, a: Import, b: Import) bool {
         _ = ctx;
@@ -148,19 +152,34 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
 
     // Aliases reference imports by their const name; resolve that name to
     // the imported path so the alias band sorts by module, not by local
-    // alias. Unresolvable bases (local structs, unimported names) keep the
-    // chain text. Duplicate const names (broken file): first match wins.
+    // alias. An alias whose base name is not an import (a local decl like
+    // `system`, a struct in the same file) is not an import alias at all:
+    // drop it so it stays in the body. Duplicate const names (broken
+    // file): first match wins.
     for (result.aliases.items) |*alias| {
         const dot = std.mem.indexOfScalar(u8, alias.path, '.') orelse continue;
         const base = alias.path[0..dot];
+        var matched = false;
         for (result.imports.items) |imp| {
             if (std.mem.eql(u8, imp.name, base)) {
                 alias.path = imp.path;
                 alias.class = classify(imp.path);
+                matched = true;
                 break;
             }
         }
+        if (!matched) alias.resolved = false;
     }
+    var alias_i: usize = 0;
+    while (alias_i < result.aliases.items.len) {
+        if (!result.aliases.items[alias_i].resolved) {
+            _ = result.aliases.swapRemove(alias_i);
+        } else alias_i += 1;
+    }
+
+    // The block ends at the first line not covered by a collected span;
+    // dropping unresolvable aliases may shorten the region.
+    result.block_end = lineBlockEnd(source, result.imports.items, result.aliases.items);
 
     // Aliases below the block are marked stray so they can be hoisted into
     // the alias band, mirroring how stray imports are hoisted.
@@ -199,6 +218,9 @@ fn collectAllowedOffsets(allocator: std.mem.Allocator, tree: Ast) !std.ArrayList
 /// base of a dotted chain like `@import("a").Foo.Bar`.
 fn importHeadOffset(tree: Ast, init: Ast.Node.Index) ?usize {
     var cur = init;
+    while (tree.nodeTag(cur) == .address_of) {
+        cur = tree.nodeData(cur).node;
+    }
     while (tree.nodeTag(cur) == .field_access) {
         cur = tree.nodeData(cur).node_and_token[0];
     }
@@ -286,8 +308,13 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
     const comment_start = findCommentStart(source, findLineStart(source, start));
 
     // Base of a dotted chain: `@import("a").Foo` → the `@import` call.
+    // `&` wraps member chains (`&@import("root").step_list`) to reference
+    // a decl of the imported module; peel it so the chain is recognized.
     var base = init;
     var member = false;
+    while (tree.nodeTag(base) == .address_of) {
+        base = tree.nodeData(base).node;
+    }
     while (tree.nodeTag(base) == .field_access) {
         base = tree.nodeData(base).node_and_token[0];
         member = true;
