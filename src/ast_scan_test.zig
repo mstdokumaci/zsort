@@ -127,6 +127,67 @@ test "analyze: alias to member import resolves" {
     try std.testing.expectEqualStrings("message_handler.zig", analysis.aliases.items[0].path);
 }
 
+test "analyze: alias to an alias base resolves" {
+    const source =
+        \\const std = @import("std");
+        \\const mem = std.mem;
+        \\const Allocator = mem.Allocator;
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), analysis.aliases.items.len);
+    for (analysis.aliases.items) |alias| {
+        try std.testing.expectEqualStrings("std", alias.path);
+        try std.testing.expectEqual(ast_scan.class_std_builtin, alias.class);
+        try std.testing.expect(alias.member);
+    }
+    try std.testing.expectEqual(source.len, analysis.block_end);
+}
+
+test "analyze: multi-hop alias chain resolves" {
+    const source =
+        \\const std = @import("std");
+        \\const mem = std.mem;
+        \\const fmt = mem.fmt;
+        \\const Writer = fmt.Writer;
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 3), analysis.aliases.items.len);
+    for (analysis.aliases.items) |alias| {
+        try std.testing.expectEqualStrings("std", alias.path);
+        try std.testing.expectEqual(ast_scan.class_std_builtin, alias.class);
+    }
+    try std.testing.expectEqual(source.len, analysis.block_end);
+}
+
+test "analyze: alias chain resolves regardless of decl order" {
+    const source =
+        \\const Allocator = mem.Allocator;
+        \\const mem = std.mem;
+        \\const std = @import("std");
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), analysis.aliases.items.len);
+    for (analysis.aliases.items) |alias| {
+        try std.testing.expectEqualStrings("std", alias.path);
+        try std.testing.expectEqual(ast_scan.class_std_builtin, alias.class);
+    }
+    try std.testing.expectEqual(source.len, analysis.block_end);
+}
+
+test "analyze: cyclic alias chain is not collected" {
+    const source =
+        \\const A = B.x;
+        \\const B = A.x;
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), analysis.aliases.items.len);
+    try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
+}
+
 test "analyze: unresolvable alias is not collected" {
     const source = "const Len = Internal.len;\n";
     var analysis = try ast_scan.analyze(std.testing.allocator, source);

@@ -1201,6 +1201,47 @@ test "processSource: alias stranded below block is hoisted into the alias band" 
     try std.testing.expect(alloc_pos < log_pos);
 }
 
+test "processSource: alias to alias base lands in the alias band (bottom)" {
+    const source =
+        \\//! header
+        \\
+        \\const body = 1;
+        \\
+        \\const std = @import("std");
+        \\
+        \\const Io = std.Io;
+        \\const assert = std.debug.assert;
+        \\const log = std.log;
+        \\const mem = std.mem;
+        \\const Allocator = mem.Allocator;
+    ;
+    const expected =
+        \\//! header
+        \\
+        \\const body = 1;
+        \\
+        \\const std = @import("std");
+        \\
+        \\const Allocator = mem.Allocator;
+        \\const Io = std.Io;
+        \\const assert = std.debug.assert;
+        \\const log = std.log;
+        \\const mem = std.mem;
+        \\
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, &.{}, true);
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(expected, result.new_text);
+    const result_src = try std.testing.allocator.dupeZ(u8, result.new_text);
+    defer std.testing.allocator.free(result_src);
+    const result2 = try zsort.processSource(std.testing.allocator, result_src, &.{}, true);
+    defer std.testing.allocator.free(result2.new_text);
+    defer std.testing.allocator.free(result2.new_block);
+    try std.testing.expect(!result2.changed);
+}
+
 test "processSource: blank above hoisted stray import is preserved" {
     const source =
         \\const std = @import("std");
