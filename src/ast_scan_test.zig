@@ -369,6 +369,101 @@ test "analyze: nested re-export import is not collected" {
     try std.testing.expectEqual(@as(usize, 0), analysis.imports.items.len);
 }
 
+fn findCandidateForTest(analysis: *const ast_scan.Analysis, name: []const u8) ?ast_scan.Import {
+    for (analysis.imports.items) |imp| {
+        if (std.mem.eql(u8, imp.name, name)) return imp;
+    }
+    for (analysis.aliases.items) |alias| {
+        if (std.mem.eql(u8, alias.name, name)) return alias;
+    }
+    return null;
+}
+
+test "analyze: unreferenced import is unused and removable" {
+    const source = "const std = @import(\"std\");\n\npub fn main() void {}\n";
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    const imp = findCandidateForTest(&analysis, "std") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!imp.used);
+    try std.testing.expect(imp.removable);
+}
+
+test "analyze: referenced import is used" {
+    const source = "const std = @import(\"std\");\n\npub fn main() void {\n    _ = std;\n}\n";
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expect(findCandidateForTest(&analysis, "std").?.used);
+}
+
+test "analyze: pub decl is not removable" {
+    const source = "pub const std = @import(\"std\");\n";
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    const imp = findCandidateForTest(&analysis, "std") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(imp.used);
+    try std.testing.expect(!imp.removable);
+}
+
+test "analyze: doc-commented decl is not removable" {
+    const source = "/// The standard library.\nconst std = @import(\"std\");\n";
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expect(!findCandidateForTest(&analysis, "std").?.removable);
+}
+
+test "analyze: alias chain collapses in one pass" {
+    const source =
+        \\const auth = @import("auth.zig");
+        \\const Config = auth.Config;
+        \\
+        \\pub fn main() void {}
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expect(!findCandidateForTest(&analysis, "auth").?.used);
+    try std.testing.expect(!findCandidateForTest(&analysis, "Config").?.used);
+}
+
+test "analyze: alias use propagates to its base" {
+    const source =
+        \\const auth = @import("auth.zig");
+        \\const Config = auth.Config;
+        \\
+        \\pub fn main() void {
+        \\    _ = Config;
+        \\}
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expect(findCandidateForTest(&analysis, "auth").?.used);
+    try std.testing.expect(findCandidateForTest(&analysis, "Config").?.used);
+}
+
+test "analyze: pub alias keeps its base used" {
+    const source =
+        \\const auth = @import("auth.zig");
+        \\pub const Config = auth.Config;
+    ;
+    var analysis = try ast_scan.analyze(std.testing.allocator, source);
+    defer analysis.deinit(std.testing.allocator);
+    try std.testing.expect(findCandidateForTest(&analysis, "auth").?.used);
+}
+
+test "analyze: reflection keeps every decl used" {
+    const sources = [_][:0]const u8{
+        "const std = @import(\"std\");\n\ntest \"all\" {\n    std.testing.refAllDecls(@This());\n}\n",
+        "const std = @import(\"std\");\n\npub fn main() void {\n    _ = @hasDecl(@This(), \"x\");\n}\n",
+        "const std = @import(\"std\");\n\npub fn main() void {\n    _ = @field(@This(), \"x\");\n}\n",
+        "const std = @import(\"std\");\n\npub fn main() void {\n    const decls = @typeInfo(u8).@\"struct\".decls;\n    _ = decls;\n}\n",
+    };
+    for (sources) |source| {
+        var analysis = try ast_scan.analyze(std.testing.allocator, source);
+        defer analysis.deinit(std.testing.allocator);
+        const imp = findCandidateForTest(&analysis, "std") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(imp.used);
+    }
+}
+
 fn blockEndForTest(source: [:0]const u8) usize {
     var analysis = ast_scan.analyze(std.testing.allocator, source) catch return source.len;
     defer analysis.deinit(std.testing.allocator);

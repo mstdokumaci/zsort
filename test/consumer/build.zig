@@ -13,13 +13,13 @@ pub fn build(b: *std.Build) void {
 
         const check_imports = b.addRunArtifact(zsort_exe);
         check_imports.setCwd(b.path("."));
-        check_imports.addArgs(&.{ "check", "src", "--ban-prefix", "./", "--ban-prefix", "src/" });
+        check_imports.addArgs(&.{ "check", "src", "--ban-prefix", "./", "--ban-prefix", "src/", "--remove-unused" });
         const check_imports_step = b.step("check-imports", "Run zsort check on this project");
         check_imports_step.dependOn(&check_imports.step);
 
         const run_fix_imports = b.addRunArtifact(zsort_exe);
         run_fix_imports.setCwd(b.path("."));
-        run_fix_imports.addArgs(&.{ "fix", "src", "--ban-prefix", "./", "--ban-prefix", "src/" });
+        run_fix_imports.addArgs(&.{ "fix", "src", "--ban-prefix", "./", "--ban-prefix", "src/", "--remove-unused" });
         const fix_imports_step = b.step("fix-imports", "Fix Zig import ordering in this project");
         fix_imports_step.dependOn(&run_fix_imports.step);
     }

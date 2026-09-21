@@ -139,6 +139,7 @@ pub fn buildSortedImportText(
     aliases: []const Import,
     block_end: usize,
     bottom: bool,
+    removed: []const Import,
 ) ![]const u8 {
     var preamble_lines: std.ArrayListUnmanaged([]const u8) = .empty;
     defer preamble_lines.deinit(allocator);
@@ -214,13 +215,25 @@ pub fn buildSortedImportText(
         // The comment run directly above the first import is attached to it
         // and travels with the block as its lead; everything above that run
         // (`//!` docs, detached headers, blanks) stays at the top of the
-        // file, where processSource emits it. The first top-region span has
-        // comment_start == null (its run reaches line 0), so this is the
-        // only place its attached comments are emitted.
+        // file, where processSource emits it. The lead is taken from the
+        // earliest span including removed ones, so removing the first import
+        // does not delete block/file header comments; `removeStrays` already
+        // spliced that run out of the body in both cases.
         var first_start: usize = source.len;
-        for (sorted_imports) |imp| first_start = @min(first_start, imp.start);
-        for (aliases) |a| first_start = @min(first_start, a.start);
-        if (first_start < block_end) {
+        var first_is_removed = false;
+        for (sorted_imports) |imp| if (imp.start < first_start) {
+            first_start = imp.start;
+            first_is_removed = false;
+        };
+        for (aliases) |a| if (a.start < first_start) {
+            first_start = a.start;
+            first_is_removed = false;
+        };
+        for (removed) |r| if (r.start < first_start) {
+            first_start = r.start;
+            first_is_removed = true;
+        };
+        if (first_start < block_end or first_is_removed) {
             const line_start = findLineStart(source, first_start);
             try buf.appendSlice(allocator, source[attachedCommentHeadStart(source, line_start)..line_start]);
         }
@@ -237,15 +250,24 @@ pub fn buildSortedImportText(
 
     // In bottom mode the trailing comments stay with the body (processSource
     // keeps them via the middle pass); only top mode attaches them to the
-    // end of the block, where they sit above the first body decl.
-    if (trailing_comments.items.len > 0 and !bottom) {
-        try buf.appendSlice(allocator, nl);
-        for (trailing_comments.items) |line| {
+    // end of the block, where they sit above the first body decl. When the
+    // block is empty (everything removed) the leading blanks were separators,
+    // not comments: keep only the comment lines and let processSource own the
+    // junction with the body.
+    var trailing = trailing_comments.items;
+    if (buf.items.len == 0) {
+        while (trailing.len > 0 and std.mem.trim(u8, trailing[0], " \t\r\n").len == 0) {
+            trailing = trailing[1..];
+        }
+    }
+    if (trailing.len > 0 and !bottom) {
+        if (buf.items.len > 0) try buf.appendSlice(allocator, nl);
+        for (trailing) |line| {
             try buf.appendSlice(allocator, line);
         }
     }
 
-    if (buf.items.len == 0 or buf.items[buf.items.len - 1] != '\n') {
+    if (buf.items.len > 0 and buf.items[buf.items.len - 1] != '\n') {
         try buf.appendSlice(allocator, nl);
     }
 
@@ -292,7 +314,8 @@ fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnma
 }
 
 /// Minimal unified-style diff: trims common prefix/suffix lines and shows the
-/// changed middle with up to two context lines around it. When `use_color` is
+/// changed middle with up to two context lines around it. Hunk numbers are
+/// `diff -U0` style (context lines are display-only). When `use_color` is
 /// set, headers, hunks, and changed lines are ANSI-colored git-style.
 pub fn formatUnifiedDiff(
     allocator: std.mem.Allocator,
@@ -347,7 +370,12 @@ pub fn formatUnifiedDiff(
 
     try w.print("  {s}--- {s}{s}\n", .{ red, esc_path, reset });
     try w.print("  {s}+++ {s}{s}\n", .{ green, esc_path, reset });
-    try w.print("  {s}@@ -{d},{d} +{d},{d} @@{s}\n", .{ cyan, p + 1, old_mid.len, p + 1, new_mid.len, reset });
+    // Hunk numbers follow `diff -U0`: the context lines printed around the
+    // change are display-only, and an empty side starts at the line before
+    // the change point.
+    const old_start = if (old_mid.len == 0) p else p + 1;
+    const new_start = if (new_mid.len == 0) p else p + 1;
+    try w.print("  {s}@@ -{d},{d} +{d},{d} @@{s}\n", .{ cyan, old_start, old_mid.len, new_start, new_mid.len, reset });
     for (old_lines.items[p -| 2..p]) |line| {
         const esc = try escapeTerm(allocator, line);
         defer if (esc.ptr != line.ptr) allocator.free(esc);
@@ -605,12 +633,19 @@ const ProcessResult = struct {
     full_diff: bool = false,
 };
 
+pub const ProcessOptions = struct {
+    banned_prefixes: []const []const u8 = &.{},
+    bottom: bool = false,
+    remove_unused: bool = false,
+};
+
 pub fn processSource(
     allocator: std.mem.Allocator,
     source: [:0]const u8,
-    banned_prefixes: []const []const u8,
-    bottom: bool,
+    options: ProcessOptions,
 ) !ProcessResult {
+    const banned_prefixes = options.banned_prefixes;
+    const bottom = options.bottom;
     if (hasSkipComment(source)) {
         return .{
             .new_text = source,
@@ -628,6 +663,36 @@ pub fn processSource(
     const block_end = analysis.block_end;
     const imports = analysis.imports.items;
     const aliases = analysis.aliases.items;
+
+    // Split the block into what is emitted and what is dropped. Removed spans
+    // still go through `removeStrays` below so a removed stray leaves the body.
+    var kept_imports_buf: std.ArrayListUnmanaged(Import) = .empty;
+    defer kept_imports_buf.deinit(allocator);
+    var kept_aliases_buf: std.ArrayListUnmanaged(Import) = .empty;
+    defer kept_aliases_buf.deinit(allocator);
+    var removed_buf: std.ArrayListUnmanaged(Import) = .empty;
+    defer removed_buf.deinit(allocator);
+    if (options.remove_unused) {
+        for (imports) |imp| {
+            if (imp.removable and !imp.used) {
+                try removed_buf.append(allocator, imp);
+            } else {
+                try kept_imports_buf.append(allocator, imp);
+            }
+        }
+        for (aliases) |alias| {
+            if (alias.removable and !alias.used) {
+                try removed_buf.append(allocator, alias);
+            } else {
+                try kept_aliases_buf.append(allocator, alias);
+            }
+        }
+    } else {
+        try kept_imports_buf.appendSlice(allocator, imports);
+        try kept_aliases_buf.appendSlice(allocator, aliases);
+    }
+    const kept_imports = kept_imports_buf.items;
+    const kept_aliases = kept_aliases_buf.items;
 
     const banned_msg = try scanBannedPatterns(allocator, &analysis, banned_prefixes, source);
     errdefer if (banned_msg) |msg| allocator.free(msg);
@@ -725,7 +790,7 @@ pub fn processSource(
         rest = owned_rest;
     }
 
-    const new_imports = try buildSortedImportText(allocator, source, imports, aliases, block_end, bottom);
+    const new_imports = try buildSortedImportText(allocator, source, kept_imports, kept_aliases, block_end, bottom, removed_buf.items);
     errdefer allocator.free(new_imports);
 
     if (bottom) {
@@ -775,7 +840,7 @@ pub fn processSource(
         if (line.len != 0) break;
         scan_pos = le;
     }
-    const junction_blank = !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0;
+    const junction_blank = new_imports.len > 0 and !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0;
 
     const full_new = if (junction_blank)
         try std.mem.concat(allocator, u8, &.{ new_imports, nl, rest })
@@ -808,6 +873,7 @@ pub const Args = struct {
     targets: std.ArrayListUnmanaged([]const u8),
     banned_prefixes: std.ArrayListUnmanaged([]const u8),
     bottom: bool = false,
+    remove_unused: bool = false,
     help: bool = false,
     version: bool = false,
 
@@ -828,6 +894,7 @@ pub fn parseArgs(
     var help = false;
     var show_version = false;
     var bottom = false;
+    var remove_unused = false;
 
     var targets: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer targets.deinit(allocator);
@@ -851,6 +918,8 @@ pub fn parseArgs(
             try banned_prefixes.append(allocator, args[i]);
         } else if (std.mem.eql(u8, arg, "--bottom")) {
             bottom = true;
+        } else if (std.mem.eql(u8, arg, "--remove-unused")) {
+            remove_unused = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             err_msg.* = try allocFmt(allocator, "Unknown option '{s}'", .{arg});
             return error.UnexpectedArg;
@@ -874,6 +943,7 @@ pub fn parseArgs(
             .targets = targets,
             .banned_prefixes = banned_prefixes,
             .bottom = bottom,
+            .remove_unused = remove_unused,
             .help = help,
             .version = show_version,
         };
@@ -891,6 +961,7 @@ pub fn parseArgs(
         .targets = targets,
         .banned_prefixes = banned_prefixes,
         .bottom = bottom,
+        .remove_unused = remove_unused,
     };
 }
 
@@ -956,6 +1027,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
         \\{[0]s}Options:{[1]s}
         \\  {[2]s}--ban-prefix <p>{[1]s}   Reject import paths starting with this prefix (repeatable)
         \\  {[2]s}--bottom{[1]s}          Place the import block at the end of the file
+        \\  {[2]s}--remove-unused{[1]s}   Drop imports and aliases no code references
         \\  {[2]s}-h, --help{[1]s}         Show this help message
         \\  {[2]s}--version{[1]s}          Print version and exit
         \\
@@ -967,8 +1039,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
 const FileJob = struct {
     arena: *std.heap.ArenaAllocator,
     path: []const u8,
-    banned: []const []const u8,
-    bottom: bool,
+    options: ProcessOptions,
     source: []const u8 = "",
     result: ?ProcessResult = null,
     read_err: ?[]const u8 = null,
@@ -982,7 +1053,7 @@ fn processFileJob(job: *FileJob, io: compat.Io) void {
         return;
     };
     job.source = source;
-    job.result = processSource(allocator, source, job.banned, job.bottom) catch |err| {
+    job.result = processSource(allocator, source, job.options) catch |err| {
         job.proc_err = @errorName(err);
         return;
     };
@@ -1107,8 +1178,11 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
             job.* = .{
                 .arena = file_arena,
                 .path = file_path,
-                .banned = parsed.banned_prefixes.items,
-                .bottom = parsed.bottom,
+                .options = .{
+                    .banned_prefixes = parsed.banned_prefixes.items,
+                    .bottom = parsed.bottom,
+                    .remove_unused = parsed.remove_unused,
+                },
             };
             initialized += 1;
         }

@@ -76,6 +76,7 @@ Modes:
 Options:
   --ban-prefix <p>   Reject imports starting with <p> (repeatable)
   --bottom           Place the import block at the end of the file
+  --remove-unused    Drop imports and aliases no code references (opt-in)
   -h, --help         Show help
   --version          Print version
 ```
@@ -86,6 +87,7 @@ zsort fix .                                       # fix everything
 zsort check src/ build.zig                        # mixed targets
 zsort check . --ban-prefix ./ --ban-prefix src/   # ban relative paths
 zsort fix . --bottom                              # imports at the end of the file
+zsort fix . --remove-unused                       # also prune dead imports
 ```
 
 - `check` prints unified diffs for files that need changes.
@@ -149,6 +151,19 @@ layout used by `zig init` templates): `//!` doc comments and comments
 detached by a blank line stay at the top, comments directly attached to an
 import travel with it, and comments after the last import stay with the
 body. The sort order and bands are unchanged.
+
+With `--remove-unused`, `fix` also deletes imports and aliases that nothing
+in the file references (and `check` reports them; exit code 1). The flag is
+opt-in and conservative:
+
+- `pub`, `extern`, and `export` decls stay: other files can reference them
+- a decl with a `///` doc comment stays, so the comment is never orphaned
+- a comment run that leads the import block (top of file, or top of the
+  block in `--bottom` layout) is never removed; comments attached to a
+  removed import inside the block are removed with it
+- files using reflection (`refAllDecls`, `declarations`, `.decls` iteration,
+  `@field`, `@hasDecl`) are left untouched, since those can reference decls
+  without naming them
 
 ## Pre-commit
 
