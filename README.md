@@ -28,7 +28,7 @@ Add to `build.zig.zon`:
 
 ```zig
 .zsort = .{
-    .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.7.0.tar.gz",
+    .url = "https://github.com/mstdokumaci/zsort/archive/refs/tags/v0.8.0.tar.gz",
     // .hash
     .lazy = true,
 },
@@ -172,7 +172,7 @@ Add to `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/mstdokumaci/zsort
-    rev: v0.7.0
+    rev: v0.8.0
     hooks:
       - id: zsort        # check mode (fail on unsorted)
       # - id: zsort-fix  # fix mode (rewrite in place)
