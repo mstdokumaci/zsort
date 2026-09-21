@@ -18,7 +18,7 @@ jobs:
       BUMP_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
-      - uses: Homebrew/actions/setup-homebrew@master
+      - uses: Homebrew/actions/setup-homebrew@main
       - name: Update tap formula and push
         env:
           TAP_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
