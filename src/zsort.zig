@@ -157,12 +157,7 @@ pub fn buildSortedImportText(
         const trimmed = std.mem.trimStart(u8, line, " \t\n\r");
         if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "//")) {
             if (!seen_content) {
-                // A removed import's attached comment dies with it; detached
-                // headers and `//!` docs stay (doc-commented decls are not
-                // removable, so they never appear in `removed`).
-                if (!removedCommentAt(source, removed, pos)) {
-                    try preamble_lines.append(allocator, line);
-                }
+                try preamble_lines.append(allocator, line);
             } else {
                 if (trailing_comment_start == null) trailing_comment_start = pos;
                 try trailing_comments.append(allocator, line);
@@ -220,13 +215,25 @@ pub fn buildSortedImportText(
         // The comment run directly above the first import is attached to it
         // and travels with the block as its lead; everything above that run
         // (`//!` docs, detached headers, blanks) stays at the top of the
-        // file, where processSource emits it. The first top-region span has
-        // comment_start == null (its run reaches line 0), so this is the
-        // only place its attached comments are emitted.
+        // file, where processSource emits it. The lead is taken from the
+        // earliest span including removed ones, so removing the first import
+        // does not delete block/file header comments; `removeStrays` already
+        // spliced that run out of the body in both cases.
         var first_start: usize = source.len;
-        for (sorted_imports) |imp| first_start = @min(first_start, imp.start);
-        for (aliases) |a| first_start = @min(first_start, a.start);
-        if (first_start < block_end) {
+        var first_is_removed = false;
+        for (sorted_imports) |imp| if (imp.start < first_start) {
+            first_start = imp.start;
+            first_is_removed = false;
+        };
+        for (aliases) |a| if (a.start < first_start) {
+            first_start = a.start;
+            first_is_removed = false;
+        };
+        for (removed) |r| if (r.start < first_start) {
+            first_start = r.start;
+            first_is_removed = true;
+        };
+        if (first_start < block_end or first_is_removed) {
             const line_start = findLineStart(source, first_start);
             try buf.appendSlice(allocator, source[attachedCommentHeadStart(source, line_start)..line_start]);
         }
@@ -243,15 +250,24 @@ pub fn buildSortedImportText(
 
     // In bottom mode the trailing comments stay with the body (processSource
     // keeps them via the middle pass); only top mode attaches them to the
-    // end of the block, where they sit above the first body decl.
-    if (trailing_comments.items.len > 0 and !bottom) {
-        try buf.appendSlice(allocator, nl);
-        for (trailing_comments.items) |line| {
+    // end of the block, where they sit above the first body decl. When the
+    // block is empty (everything removed) the leading blanks were separators,
+    // not comments: keep only the comment lines and let processSource own the
+    // junction with the body.
+    var trailing = trailing_comments.items;
+    if (buf.items.len == 0) {
+        while (trailing.len > 0 and std.mem.trim(u8, trailing[0], " \t\r\n").len == 0) {
+            trailing = trailing[1..];
+        }
+    }
+    if (trailing.len > 0 and !bottom) {
+        if (buf.items.len > 0) try buf.appendSlice(allocator, nl);
+        for (trailing) |line| {
             try buf.appendSlice(allocator, line);
         }
     }
 
-    if (buf.items.len == 0 or buf.items[buf.items.len - 1] != '\n') {
+    if (buf.items.len > 0 and buf.items[buf.items.len - 1] != '\n') {
         try buf.appendSlice(allocator, nl);
     }
 
@@ -298,7 +314,8 @@ fn splitLines(allocator: std.mem.Allocator, text: []const u8) !std.ArrayListUnma
 }
 
 /// Minimal unified-style diff: trims common prefix/suffix lines and shows the
-/// changed middle with up to two context lines around it. When `use_color` is
+/// changed middle with up to two context lines around it. Hunk numbers are
+/// `diff -U0` style (context lines are display-only). When `use_color` is
 /// set, headers, hunks, and changed lines are ANSI-colored git-style.
 pub fn formatUnifiedDiff(
     allocator: std.mem.Allocator,
@@ -353,7 +370,12 @@ pub fn formatUnifiedDiff(
 
     try w.print("  {s}--- {s}{s}\n", .{ red, esc_path, reset });
     try w.print("  {s}+++ {s}{s}\n", .{ green, esc_path, reset });
-    try w.print("  {s}@@ -{d},{d} +{d},{d} @@{s}\n", .{ cyan, p + 1, old_mid.len, p + 1, new_mid.len, reset });
+    // Hunk numbers follow `diff -U0`: the context lines printed around the
+    // change are display-only, and an empty side starts at the line before
+    // the change point.
+    const old_start = if (old_mid.len == 0) p else p + 1;
+    const new_start = if (new_mid.len == 0) p else p + 1;
+    try w.print("  {s}@@ -{d},{d} +{d},{d} @@{s}\n", .{ cyan, old_start, old_mid.len, new_start, new_mid.len, reset });
     for (old_lines.items[p -| 2..p]) |line| {
         const esc = try escapeTerm(allocator, line);
         defer if (esc.ptr != line.ptr) allocator.free(esc);
@@ -558,18 +580,6 @@ fn attachedCommentHeadStart(source: []const u8, line_start: usize) usize {
         }
     }
     return pos;
-}
-
-/// True when `pos` is a comment line inside the `//` run directly above a
-/// removed import, so the comment is dropped with the decl it documents.
-/// `//!` lines are never part of the run (`attachedCommentHeadStart` stops at
-/// them) and doc-commented decls are not removable to begin with.
-fn removedCommentAt(source: []const u8, removed: []const Import, pos: usize) bool {
-    for (removed) |imp| {
-        const line_start = findLineStart(source, imp.start);
-        if (pos >= attachedCommentHeadStart(source, line_start) and pos < line_start) return true;
-    }
-    return false;
 }
 
 /// Append the `//`-prefixed lines of `source[start..end]`, dropping blank
@@ -830,7 +840,7 @@ pub fn processSource(
         if (line.len != 0) break;
         scan_pos = le;
     }
-    const junction_blank = !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0;
+    const junction_blank = new_imports.len > 0 and !has_trailing_comment and !endsWithBlankLine(new_imports) and rest.len > 0;
 
     const full_new = if (junction_blank)
         try std.mem.concat(allocator, u8, &.{ new_imports, nl, rest })

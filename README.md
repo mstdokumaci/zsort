@@ -158,8 +158,9 @@ opt-in and conservative:
 
 - `pub`, `extern`, and `export` decls stay: other files can reference them
 - a decl with a `///` doc comment stays, so the comment is never orphaned
-- a `//` comment run directly above a removed import is removed with it
-  (separate it with a blank line to keep it as a header)
+- a comment run that leads the import block (top of file, or top of the
+  block in `--bottom` layout) is never removed; comments attached to a
+  removed import inside the block are removed with it
 - files using reflection (`refAllDecls`, `declarations`, `.decls` iteration,
   `@field`, `@hasDecl`) are left untouched, since those can reference decls
   without naming them

@@ -893,6 +893,32 @@ test "formatUnifiedDiff: CRLF input diffs cleanly" {
     try std.testing.expectEqualStrings(expected, diff);
 }
 
+test "formatUnifiedDiff: pure deletion header starts before the removed line" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\nc\n", "a\nc\n", false);
+    defer std.testing.allocator.free(diff);
+    const expected = "  --- t.zig\n" ++
+        "  +++ t.zig\n" ++
+        "  @@ -2,1 +1,0 @@\n" ++
+        "   a\n" ++
+        "  - b\n" ++
+        "   c\n" ++
+        "\n";
+    try std.testing.expectEqualStrings(expected, diff);
+}
+
+test "formatUnifiedDiff: pure insertion header starts before the added line" {
+    const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nc\n", "a\nb\nc\n", false);
+    defer std.testing.allocator.free(diff);
+    const expected = "  --- t.zig\n" ++
+        "  +++ t.zig\n" ++
+        "  @@ -1,0 +2,1 @@\n" ++
+        "   a\n" ++
+        "  + b\n" ++
+        "   c\n" ++
+        "\n";
+    try std.testing.expectEqualStrings(expected, diff);
+}
+
 test "formatUnifiedDiff: trailing-newline difference emits marker" {
     const diff = try zsort.formatUnifiedDiff(std.testing.allocator, "t.zig", "a\nb\n", "a\nb", false);
     defer std.testing.allocator.free(diff);
@@ -1798,14 +1824,35 @@ test "processSource: --remove-unused drops an unreferenced import" {
     );
 }
 
-test "processSource: --remove-unused drops the comment of the first removed import" {
+test "processSource: --remove-unused keeps the block-lead comment of a removed import" {
     const source = "//! Module docs.\n\n// Handles request authentication.\nconst auth = @import(\"auth.zig\");\nconst std = @import(\"std\");\n\npub fn main() void { _ = std; }\n";
     const result = try zsort.processSource(std.testing.allocator, source, .{ .remove_unused = true });
     defer std.testing.allocator.free(result.new_text);
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
     try std.testing.expectEqualStrings(
-        "//! Module docs.\n\nconst std = @import(\"std\");\n\npub fn main() void { _ = std; }\n",
+        "//! Module docs.\n\n// Handles request authentication.\nconst std = @import(\"std\");\n\npub fn main() void { _ = std; }\n",
+        result.new_text,
+    );
+}
+
+test "processSource: --remove-unused drops a mid-block comment of a removed import" {
+    const source = "const std = @import(\"std\");\n// About dead.\nconst dead = @import(\"dead.zig\");\nconst other = @import(\"other.zig\");\n\npub fn main() void { _ = std; _ = other; }\n";
+    const result = try zsort.processSource(std.testing.allocator, source, .{ .remove_unused = true });
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expect(std.mem.indexOf(u8, result.new_text, "About dead.") == null);
+}
+
+test "processSource: --bottom --remove-unused keeps the block lead above the moved block" {
+    const source = "fn f() void {}\n\n// zig fmt: off\n// dead import below\nconst dead = @import(\"dead.zig\");\nconst std = @import(\"std\");\n\npub fn main() void { _ = std; }\n";
+    const result = try zsort.processSource(std.testing.allocator, source, .{ .bottom = true, .remove_unused = true });
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        "fn f() void {}\n\npub fn main() void { _ = std; }\n\n// zig fmt: off\n// dead import below\nconst std = @import(\"std\");\n",
         result.new_text,
     );
 }
@@ -1941,4 +1988,30 @@ test "parseArgs: --remove-unused flag accepted" {
     var plain = try zsort.parseArgs(std.testing.allocator, &.{ "zsort", "fix", "src" }, &msg);
     defer plain.deinit(std.testing.allocator);
     try std.testing.expect(!plain.remove_unused);
+}
+
+test "buildSortedImportText: empty block returns no separator newline" {
+    const source = "const dead = @import(\"dead.zig\");\n\nbody\n";
+    const block_end = "const dead = @import(\"dead.zig\");\n\n".len;
+    const result = try zsort.buildSortedImportText(std.testing.allocator, source, &.{}, &.{}, block_end, false, &.{});
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "processSource: --remove-unused leaves no blank when every import is removed" {
+    const source = "const dead = @import(\"dead.zig\");\n\npub fn main() void {}\n";
+    const result = try zsort.processSource(std.testing.allocator, source, .{ .remove_unused = true });
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings("pub fn main() void {}\n", result.new_text);
+}
+
+test "processSource: --remove-unused keeps a trailing comment without a leading blank" {
+    const source = "const dead = @import(\"dead.zig\");\n// Explains the body.\npub fn main() void {}\n";
+    const result = try zsort.processSource(std.testing.allocator, source, .{ .remove_unused = true });
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings("// Explains the body.\npub fn main() void {}\n", result.new_text);
 }
