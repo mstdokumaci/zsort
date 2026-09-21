@@ -139,6 +139,7 @@ pub fn buildSortedImportText(
     aliases: []const Import,
     block_end: usize,
     bottom: bool,
+    removed: []const Import,
 ) ![]const u8 {
     var preamble_lines: std.ArrayListUnmanaged([]const u8) = .empty;
     defer preamble_lines.deinit(allocator);
@@ -156,7 +157,12 @@ pub fn buildSortedImportText(
         const trimmed = std.mem.trimStart(u8, line, " \t\n\r");
         if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "//")) {
             if (!seen_content) {
-                try preamble_lines.append(allocator, line);
+                // A removed import's attached comment dies with it; detached
+                // headers and `//!` docs stay (doc-commented decls are not
+                // removable, so they never appear in `removed`).
+                if (!removedCommentAt(source, removed, pos)) {
+                    try preamble_lines.append(allocator, line);
+                }
             } else {
                 if (trailing_comment_start == null) trailing_comment_start = pos;
                 try trailing_comments.append(allocator, line);
@@ -554,6 +560,18 @@ fn attachedCommentHeadStart(source: []const u8, line_start: usize) usize {
     return pos;
 }
 
+/// True when `pos` is a comment line inside the `//` run directly above a
+/// removed import, so the comment is dropped with the decl it documents.
+/// `//!` lines are never part of the run (`attachedCommentHeadStart` stops at
+/// them) and doc-commented decls are not removable to begin with.
+fn removedCommentAt(source: []const u8, removed: []const Import, pos: usize) bool {
+    for (removed) |imp| {
+        const line_start = findLineStart(source, imp.start);
+        if (pos >= attachedCommentHeadStart(source, line_start) and pos < line_start) return true;
+    }
+    return false;
+}
+
 /// Append the `//`-prefixed lines of `source[start..end]`, dropping blank
 /// lines. Keeps the trailing comments of the import block with the body when
 /// the block itself moves to the end of the file.
@@ -605,12 +623,19 @@ const ProcessResult = struct {
     full_diff: bool = false,
 };
 
+pub const ProcessOptions = struct {
+    banned_prefixes: []const []const u8 = &.{},
+    bottom: bool = false,
+    remove_unused: bool = false,
+};
+
 pub fn processSource(
     allocator: std.mem.Allocator,
     source: [:0]const u8,
-    banned_prefixes: []const []const u8,
-    bottom: bool,
+    options: ProcessOptions,
 ) !ProcessResult {
+    const banned_prefixes = options.banned_prefixes;
+    const bottom = options.bottom;
     if (hasSkipComment(source)) {
         return .{
             .new_text = source,
@@ -628,6 +653,36 @@ pub fn processSource(
     const block_end = analysis.block_end;
     const imports = analysis.imports.items;
     const aliases = analysis.aliases.items;
+
+    // Split the block into what is emitted and what is dropped. Removed spans
+    // still go through `removeStrays` below so a removed stray leaves the body.
+    var kept_imports_buf: std.ArrayListUnmanaged(Import) = .empty;
+    defer kept_imports_buf.deinit(allocator);
+    var kept_aliases_buf: std.ArrayListUnmanaged(Import) = .empty;
+    defer kept_aliases_buf.deinit(allocator);
+    var removed_buf: std.ArrayListUnmanaged(Import) = .empty;
+    defer removed_buf.deinit(allocator);
+    if (options.remove_unused) {
+        for (imports) |imp| {
+            if (imp.removable and !imp.used) {
+                try removed_buf.append(allocator, imp);
+            } else {
+                try kept_imports_buf.append(allocator, imp);
+            }
+        }
+        for (aliases) |alias| {
+            if (alias.removable and !alias.used) {
+                try removed_buf.append(allocator, alias);
+            } else {
+                try kept_aliases_buf.append(allocator, alias);
+            }
+        }
+    } else {
+        try kept_imports_buf.appendSlice(allocator, imports);
+        try kept_aliases_buf.appendSlice(allocator, aliases);
+    }
+    const kept_imports = kept_imports_buf.items;
+    const kept_aliases = kept_aliases_buf.items;
 
     const banned_msg = try scanBannedPatterns(allocator, &analysis, banned_prefixes, source);
     errdefer if (banned_msg) |msg| allocator.free(msg);
@@ -725,7 +780,7 @@ pub fn processSource(
         rest = owned_rest;
     }
 
-    const new_imports = try buildSortedImportText(allocator, source, imports, aliases, block_end, bottom);
+    const new_imports = try buildSortedImportText(allocator, source, kept_imports, kept_aliases, block_end, bottom, removed_buf.items);
     errdefer allocator.free(new_imports);
 
     if (bottom) {
@@ -808,6 +863,7 @@ pub const Args = struct {
     targets: std.ArrayListUnmanaged([]const u8),
     banned_prefixes: std.ArrayListUnmanaged([]const u8),
     bottom: bool = false,
+    remove_unused: bool = false,
     help: bool = false,
     version: bool = false,
 
@@ -828,6 +884,7 @@ pub fn parseArgs(
     var help = false;
     var show_version = false;
     var bottom = false;
+    var remove_unused = false;
 
     var targets: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer targets.deinit(allocator);
@@ -851,6 +908,8 @@ pub fn parseArgs(
             try banned_prefixes.append(allocator, args[i]);
         } else if (std.mem.eql(u8, arg, "--bottom")) {
             bottom = true;
+        } else if (std.mem.eql(u8, arg, "--remove-unused")) {
+            remove_unused = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             err_msg.* = try allocFmt(allocator, "Unknown option '{s}'", .{arg});
             return error.UnexpectedArg;
@@ -874,6 +933,7 @@ pub fn parseArgs(
             .targets = targets,
             .banned_prefixes = banned_prefixes,
             .bottom = bottom,
+            .remove_unused = remove_unused,
             .help = help,
             .version = show_version,
         };
@@ -891,6 +951,7 @@ pub fn parseArgs(
         .targets = targets,
         .banned_prefixes = banned_prefixes,
         .bottom = bottom,
+        .remove_unused = remove_unused,
     };
 }
 
@@ -956,6 +1017,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
         \\{[0]s}Options:{[1]s}
         \\  {[2]s}--ban-prefix <p>{[1]s}   Reject import paths starting with this prefix (repeatable)
         \\  {[2]s}--bottom{[1]s}          Place the import block at the end of the file
+        \\  {[2]s}--remove-unused{[1]s}   Drop imports and aliases no code references
         \\  {[2]s}-h, --help{[1]s}         Show this help message
         \\  {[2]s}--version{[1]s}          Print version and exit
         \\
@@ -967,8 +1029,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
 const FileJob = struct {
     arena: *std.heap.ArenaAllocator,
     path: []const u8,
-    banned: []const []const u8,
-    bottom: bool,
+    options: ProcessOptions,
     source: []const u8 = "",
     result: ?ProcessResult = null,
     read_err: ?[]const u8 = null,
@@ -982,7 +1043,7 @@ fn processFileJob(job: *FileJob, io: compat.Io) void {
         return;
     };
     job.source = source;
-    job.result = processSource(allocator, source, job.banned, job.bottom) catch |err| {
+    job.result = processSource(allocator, source, job.options) catch |err| {
         job.proc_err = @errorName(err);
         return;
     };
@@ -1107,8 +1168,11 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
             job.* = .{
                 .arena = file_arena,
                 .path = file_path,
-                .banned = parsed.banned_prefixes.items,
-                .bottom = parsed.bottom,
+                .options = .{
+                    .banned_prefixes = parsed.banned_prefixes.items,
+                    .bottom = parsed.bottom,
+                    .remove_unused = parsed.remove_unused,
+                },
             };
             initialized += 1;
         }

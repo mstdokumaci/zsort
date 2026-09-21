@@ -32,6 +32,13 @@ pub const Import = struct {
     /// False when the base name is neither an import nor a resolved alias
     /// (a local decl); such aliases are dropped from the band.
     resolved: bool = true,
+    /// False when the decl must never be dropped as unused: `pub`, `extern`,
+    /// and `export` decls can be referenced from other files, and removing a
+    /// decl while leaving its doc comment behind is a compile error.
+    removable: bool = true,
+    /// False when no kept code references the name. Set by the liveness pass;
+    /// defaults to true so decls collected elsewhere are never dropped.
+    used: bool = true,
 
     fn lessThan(ctx: void, a: Import, b: Import) bool {
         _ = ctx;
@@ -89,6 +96,17 @@ pub fn findCommentStart(source: []const u8, line_start: usize) ?usize {
         }
     }
     return comment_start;
+}
+
+/// True when a `///` line sits directly above `decl_start` (a doc-comment run
+/// ends with one). Such decls must not be removed: the orphaned doc comment
+/// would not parse.
+fn hasDocComment(source: []const u8, decl_start: usize) bool {
+    if (decl_start == 0) return false;
+    const ls = findLineStart(source, decl_start - 1);
+    const le = findLineEnd(source, ls);
+    const trimmed = std.mem.trim(u8, source[ls..le], " \t\r\n");
+    return std.mem.startsWith(u8, trimmed, "///") and !std.mem.startsWith(u8, trimmed, "////");
 }
 
 pub const Analysis = struct {
@@ -204,7 +222,90 @@ pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
     for (result.imports.items) |*imp| imp.stray = imp.start >= result.block_end;
     std.sort.pdq(Import, result.imports.items, {}, Import.lessThan);
     std.sort.pdq(Import, result.aliases.items, {}, Import.lessThan);
+    try markUsed(allocator, tree, &result);
     return result;
+}
+
+/// Marks each import/alias `used` when some kept code references its name.
+/// An identifier token outside every candidate's span is an external use; one
+/// inside candidate C's span counts only when C itself is used, so a chain
+/// (`const auth = @import(...); const Config = auth.Config;`) that nobody
+/// references collapses in a single run. Non-removable candidates always
+/// count as used, since they stay in the file and may reference others.
+fn markUsed(allocator: std.mem.Allocator, tree: Ast, result: *Analysis) !void {
+    // Reflection can reference decls without naming them; leave such files
+    // fully intact.
+    if (usesReflection(tree)) return;
+
+    const Candidate = struct { imp: *Import, name: []const u8 };
+    var candidates: std.ArrayListUnmanaged(Candidate) = .empty;
+    defer candidates.deinit(allocator);
+    for (result.imports.items) |*imp| {
+        if (imp.name.len == 0) continue;
+        imp.used = !imp.removable;
+        try candidates.append(allocator, .{ .imp = imp, .name = imp.name });
+    }
+    for (result.aliases.items) |*alias| {
+        if (alias.name.len == 0) continue;
+        alias.used = !alias.removable;
+        try candidates.append(allocator, .{ .imp = alias, .name = alias.name });
+    }
+
+    var edges: std.ArrayListUnmanaged([2]usize) = .empty;
+    defer edges.deinit(allocator);
+
+    const tags = tree.tokens.items(.tag);
+    for (tags, 0..) |tag, i| {
+        if (tag != .identifier) continue;
+        const slice = tree.tokenSlice(@intCast(i));
+        const offset = tree.tokens.items(.start)[i];
+        var owner: ?usize = null;
+        for (candidates.items, 0..) |c, ci| {
+            if (c.imp.start <= offset and offset < c.imp.end) {
+                owner = ci;
+                break;
+            }
+        }
+        for (candidates.items, 0..) |c, ci| {
+            if (!std.mem.eql(u8, c.name, slice)) continue;
+            if (owner) |o| {
+                if (o != ci) try edges.append(allocator, .{ o, ci });
+            } else {
+                c.imp.used = true;
+            }
+        }
+    }
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (edges.items) |edge| {
+            if (candidates.items[edge[0]].imp.used and !candidates.items[edge[1]].imp.used) {
+                candidates.items[edge[1]].imp.used = true;
+                changed = true;
+            }
+        }
+    }
+}
+
+/// True when the file names a decl dynamically (`refAllDecls`,
+/// `std.meta.declarations`, `.decls` iteration, `@field`, `@hasDecl`), which
+/// the identifier-based liveness pass cannot see; everything is kept there.
+fn usesReflection(tree: Ast) bool {
+    const tags = tree.tokens.items(.tag);
+    for (tags, 0..) |tag, i| {
+        if (tag != .identifier and tag != .builtin) continue;
+        const slice = tree.tokenSlice(@intCast(i));
+        if (tag == .builtin) {
+            if (std.mem.eql(u8, slice, "@field") or std.mem.eql(u8, slice, "@hasDecl")) return true;
+        } else if (std.mem.eql(u8, slice, "refAllDecls") or
+            std.mem.eql(u8, slice, "declarations") or
+            std.mem.eql(u8, slice, "decls"))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Offsets of every `@import` call that heads a `const` declaration's
@@ -322,6 +423,10 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
     // whitespace between modifiers and name (tabs, doubled spaces) is moot.
     const name = tree.tokenSlice(vd.ast.mut_token + 1);
     const comment_start = findCommentStart(source, findLineStart(source, start));
+    // `pub`/`extern`/`export` decls are visible to other files, and a doc
+    // comment left orphaned by removal would not parse.
+    const removable = vd.visib_token == null and vd.extern_export_token == null and
+        !hasDocComment(source, start);
 
     // Base of a dotted chain: `@import("a").Foo` → the `@import` call.
     // `&` wraps member chains (`&@import("root").step_list`) to reference
@@ -355,6 +460,7 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
             .name = name,
             .member = member,
             .text = text,
+            .removable = removable,
         }, .alias = false };
     }
 
@@ -369,6 +475,7 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
             .comment_start = comment_start,
             .name = name,
             .text = text,
+            .removable = removable,
         }, .alias = true };
     }
 
@@ -385,6 +492,7 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
             .name = name,
             .resolved = false,
             .text = text,
+            .removable = removable,
         }, .alias = true };
     }
 
@@ -402,6 +510,7 @@ fn classifyDecl(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]c
             .name = name,
             .member = member,
             .text = text,
+            .removable = removable,
         }, .alias = true };
     }
 

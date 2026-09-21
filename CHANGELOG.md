@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `--remove-unused` drops unused imports and aliases; opt-in,
+  works with `check` and `fix`, and stays conservative: `pub`/`extern`/
+  `export` and doc-commented decls are kept, alias chains collapse in one
+  run, and files using reflection are left untouched
+
 ## [0.7.0] - 2026-08-11
 
 ### Added
