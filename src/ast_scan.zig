@@ -6,6 +6,8 @@
 
 const std = @import("std");
 
+const compat = @import("compat.zig");
+
 const Ast = std.zig.Ast;
 
 pub const class_std_builtin: u2 = 0;
@@ -140,7 +142,7 @@ const Found = struct {
 /// into it (or into `Analysis.owned_paths` for escaped literals), so both
 /// must outlive the analysis.
 pub fn analyze(allocator: std.mem.Allocator, source: [:0]const u8) !Analysis {
-    var tree = try std.zig.Ast.parse(allocator, source, .zig);
+    var tree = try compat.parseAst(allocator, source);
     defer tree.deinit(allocator);
 
     var result: Analysis = .{};
@@ -315,7 +317,7 @@ fn collectAllowedOffsets(allocator: std.mem.Allocator, tree: Ast) !std.ArrayList
     errdefer allowed.deinit(allocator);
     var i: u32 = 0;
     while (i < tree.nodes.len) : (i += 1) {
-        const node: Ast.Node.Index = @enumFromInt(i);
+        const node: Ast.Node.Index = compat.nodeIndex(Ast.Node.Index, i);
         const vd: ?Ast.full.VarDecl = switch (tree.nodeTag(node)) {
             .simple_var_decl => tree.simpleVarDecl(node),
             .local_var_decl => tree.localVarDecl(node),
@@ -396,7 +398,7 @@ fn importCalls(allocator: std.mem.Allocator, owned: *std.ArrayListUnmanaged([]co
 
     var i: u32 = 0;
     while (i < tree.nodes.len) : (i += 1) {
-        const node: Ast.Node.Index = @enumFromInt(i);
+        const node: Ast.Node.Index = compat.nodeIndex(Ast.Node.Index, i);
         const tag = tree.nodeTag(node);
         if (tag != .builtin_call and tag != .builtin_call_comma and
             tag != .builtin_call_two and tag != .builtin_call_two_comma) continue;

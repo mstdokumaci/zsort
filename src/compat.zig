@@ -1,10 +1,12 @@
-//! Cross-version std shims for Zig 0.15 (std.fs Dir API) vs 0.16 (std.Io).
-//! Every branch is comptime-known, so the dead version's code is never
-//! semantically analyzed and both versions compile from this one file.
+//! Cross-version std shims for Zig 0.15 (std.fs Dir API) vs 0.16+ (std.Io),
+//! plus the 0.17 API renames. Every branch is comptime-known, so the dead
+//! version's code is never semantically analyzed and all versions compile
+//! from this one file.
 const builtin = @import("builtin");
 const std = @import("std");
 
 pub const is_v016 = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 16;
+const is_v017 = builtin.zig_version.major == 0 and builtin.zig_version.minor >= 17;
 
 pub const Io = if (is_v016) std.Io else void;
 pub const Dir = if (is_v016) std.Io.Dir else std.fs.Dir;
@@ -197,4 +199,24 @@ fn collectArgs(allocator: std.mem.Allocator, args: std.process.Args) ![]const []
     defer it.deinit();
     while (it.next()) |arg| try list.append(allocator, try allocator.dupe(u8, arg));
     return list.toOwnedSlice(allocator);
+}
+
+/// `std.zig.Ast.parse` took a `Mode` before 0.17 and takes `ParseOptions` since.
+pub fn parseAst(allocator: std.mem.Allocator, source: [:0]const u8) !std.zig.Ast {
+    if (is_v017) return std.zig.Ast.parse(allocator, source, .{ .mode = .zig });
+    return std.zig.Ast.parse(allocator, source, .zig);
+}
+
+/// Sentinel-terminated duplicate; `dupeZ` was removed in 0.17.
+pub fn dupeZ(allocator: std.mem.Allocator, source: []const u8) ![:0]u8 {
+    if (is_v017) return allocator.dupeSentinel(u8, source, 0);
+    return allocator.dupeZ(u8, source);
+}
+
+/// `Ast.Node.Index` is a non-exhaustive `enum(u32)`. `std.enums.fromInt`
+/// converts to it on every supported version; `@enumFromInt` cannot be used
+/// because 0.17's formatter rewrites that spelling to `@fromBackingInt`,
+/// which does not exist before 0.17.
+pub fn nodeIndex(comptime E: type, i: u32) E {
+    return std.enums.fromInt(E, i).?;
 }

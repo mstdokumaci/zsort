@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Zig 0.17 support: `std.zig.Ast.parse`'s `ParseOptions`, `dupeSentinel`
+  (replacing the removed `dupeZ`), and the `Ast.Node.Index` conversion are
+  shimmed in `src/compat.zig`; 0.15.2 and 0.16 keep working from the same
+  source tree
+
+### Changed
+
+- CI gates and release builds now run on Zig 0.17; the lint matrix covers
+  0.15.2, 0.16 and 0.17
+
 ## [0.8.0] - 2026-09-22
 
 ### Added

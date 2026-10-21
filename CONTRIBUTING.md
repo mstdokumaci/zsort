@@ -4,7 +4,8 @@ Open an issue before sending a pull request so the change can be discussed first
 
 ## Requirements
 
-Zig 0.15.2 or newer (including 0.16). All checks below must pass on both versions.
+Zig 0.15.2 or newer (including 0.16 and 0.17). All checks below must pass on
+every version.
 
 ## Acceptance criteria
 
@@ -72,9 +73,9 @@ below and verify the SHA-256 before use.
 
 ## Pull requests
 
-CI runs the same gates on every PR across Zig 0.15.2 and 0.16 on Linux and
-macOS. Passing the checks above locally is the best way to avoid a red build.
-Keep `test/consumer/` in sync when behavior changes.
+CI runs the same gates on every PR across Zig 0.15.2, 0.16 and 0.17 on Linux
+and macOS. Passing the checks above locally is the best way to avoid a red
+build. Keep `test/consumer/` in sync when behavior changes.
 
 ## Releasing
 
