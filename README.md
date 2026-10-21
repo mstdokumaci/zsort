@@ -7,7 +7,7 @@ declarations, similar to [isort](https://pycqa.github.io/isort/) for Python or
 ## Installation
 
 > [!NOTE]
-> Requires Zig 0.15.2 or newer (including 0.16) on Linux or macOS.
+> Requires Zig 0.15.2 or newer (including 0.16 and 0.17) on Linux or macOS.
 > On Windows, use [WSL2](https://learn.microsoft.com/windows/wsl/).
 
 ### Homebrew

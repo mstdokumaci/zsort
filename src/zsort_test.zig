@@ -99,7 +99,7 @@ test "buildSortedImportText: idempotent fix twice" {
     try full1.appendSlice(std.testing.allocator, pass1);
     try full1.appendSlice(std.testing.allocator, source[block_end1..]);
 
-    const full1_z = try std.testing.allocator.dupeZ(u8, full1.items);
+    const full1_z = try compat.dupeZ(std.testing.allocator, full1.items);
     defer std.testing.allocator.free(full1_z);
     const block_end2 = blockEndForTest(full1_z);
     var imports2 = try collectImportsForTest(full1_z, block_end2);
@@ -424,7 +424,7 @@ test "processSource: idempotent" {
     const r1 = try zsort.processSource(std.testing.allocator, source, .{});
     defer std.testing.allocator.free(r1.new_text);
     defer std.testing.allocator.free(r1.new_block);
-    const r1_z = try std.testing.allocator.dupeZ(u8, r1.new_text);
+    const r1_z = try compat.dupeZ(std.testing.allocator, r1.new_text);
     defer std.testing.allocator.free(r1_z);
     const r2 = try zsort.processSource(std.testing.allocator, r1_z, .{});
     defer std.testing.allocator.free(r2.new_text);
@@ -689,7 +689,7 @@ test "processSource: --bottom is idempotent on an already-bottom banded file" {
             "const log = std.log;\n",
         result.new_text,
     );
-    const second_src = try std.testing.allocator.dupeZ(u8, result.new_text);
+    const second_src = try compat.dupeZ(std.testing.allocator, result.new_text);
     defer std.testing.allocator.free(second_src);
     const second = try zsort.processSource(std.testing.allocator, second_src, .{ .bottom = true });
     defer std.testing.allocator.free(second.new_text);
@@ -731,7 +731,7 @@ test "processSource: --bottom normalizes a trailing blank line once, then idempo
         "pub fn main() !void {}\n\nconst a = @import(\"a.zig\");\nconst b = @import(\"b.zig\");\n",
         result.new_text,
     );
-    const second_src = try std.testing.allocator.dupeZ(u8, result.new_text);
+    const second_src = try compat.dupeZ(std.testing.allocator, result.new_text);
     defer std.testing.allocator.free(second_src);
     const second = try zsort.processSource(std.testing.allocator, second_src, .{ .bottom = true });
     defer std.testing.allocator.free(second.new_text);
@@ -1260,7 +1260,7 @@ test "processSource: alias to alias base lands in the alias band (bottom)" {
     defer std.testing.allocator.free(result.new_block);
     try std.testing.expect(result.changed);
     try std.testing.expectEqualStrings(expected, result.new_text);
-    const result_src = try std.testing.allocator.dupeZ(u8, result.new_text);
+    const result_src = try compat.dupeZ(std.testing.allocator, result.new_text);
     defer std.testing.allocator.free(result_src);
     const result2 = try zsort.processSource(std.testing.allocator, result_src, .{ .bottom = true });
     defer std.testing.allocator.free(result2.new_text);
@@ -1475,7 +1475,7 @@ test "processSource: posix-style re-export block untouched and idempotent" {
         try std.testing.expect(af_pos < e_pos);
         try std.testing.expect(e_pos < main_pos);
 
-        const r1_z = try std.testing.allocator.dupeZ(u8, r1.new_text);
+        const r1_z = try compat.dupeZ(std.testing.allocator, r1.new_text);
         defer std.testing.allocator.free(r1_z);
         const r2 = try zsort.processSource(std.testing.allocator, r1_z, .{ .bottom = bottom });
         defer std.testing.allocator.free(r2.new_text);
@@ -1969,7 +1969,7 @@ test "processSource: --remove-unused is idempotent" {
     defer std.testing.allocator.free(first.new_block);
     try std.testing.expect(first.changed);
 
-    const second_src = try std.testing.allocator.dupeZ(u8, first.new_text);
+    const second_src = try compat.dupeZ(std.testing.allocator, first.new_text);
     defer std.testing.allocator.free(second_src);
     const second = try zsort.processSource(std.testing.allocator, second_src, .{ .remove_unused = true });
     defer std.testing.allocator.free(second.new_text);

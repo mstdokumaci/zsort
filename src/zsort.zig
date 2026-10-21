@@ -112,7 +112,7 @@ pub fn hasBannedPatterns(
     source: []const u8,
     banned_prefixes: []const []const u8,
 ) !?[]const u8 {
-    const dup = try allocator.dupeZ(u8, source);
+    const dup = try compat.dupeZ(allocator, source);
     defer allocator.free(dup);
     var analysis = try ast_scan.analyze(allocator, dup);
     defer analysis.deinit(allocator);
