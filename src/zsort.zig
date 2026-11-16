@@ -89,11 +89,12 @@ fn scanBannedPatterns(
     allocator: std.mem.Allocator,
     analysis: *const ast_scan.Analysis,
     banned_prefixes: []const []const u8,
+    allow_inline_imports: bool,
     source: []const u8,
 ) !?[]const u8 {
     for (analysis.calls.items) |call| {
         const line = std.mem.count(u8, source[0..call.offset], "\n") + 1;
-        if (std.mem.indexOfScalar(usize, analysis.allowed.items, call.offset) == null) {
+        if (!allow_inline_imports and std.mem.indexOfScalar(usize, analysis.allowed.items, call.offset) == null) {
             return try allocFmt(allocator, "inline @import inside a type expression (line {d})", .{line});
         }
         if (call.path) |path| {
@@ -116,7 +117,7 @@ pub fn hasBannedPatterns(
     defer allocator.free(dup);
     var analysis = try ast_scan.analyze(allocator, dup);
     defer analysis.deinit(allocator);
-    return scanBannedPatterns(allocator, &analysis, banned_prefixes, source);
+    return scanBannedPatterns(allocator, &analysis, banned_prefixes, false, source);
 }
 
 fn detectNewline(source: []const u8) []const u8 {
@@ -637,6 +638,9 @@ pub const ProcessOptions = struct {
     banned_prefixes: []const []const u8 = &.{},
     bottom: bool = false,
     remove_unused: bool = false,
+    /// Accept `@import` calls outside the top-level import block (switch
+    /// arms, test bodies, type expressions); `--ban-prefix` still applies.
+    allow_inline_imports: bool = false,
 };
 
 pub fn processSource(
@@ -694,7 +698,7 @@ pub fn processSource(
     const kept_imports = kept_imports_buf.items;
     const kept_aliases = kept_aliases_buf.items;
 
-    const banned_msg = try scanBannedPatterns(allocator, &analysis, banned_prefixes, source);
+    const banned_msg = try scanBannedPatterns(allocator, &analysis, banned_prefixes, options.allow_inline_imports, source);
     errdefer if (banned_msg) |msg| allocator.free(msg);
 
     if (imports.len == 0) {
@@ -874,6 +878,7 @@ pub const Args = struct {
     banned_prefixes: std.ArrayListUnmanaged([]const u8),
     bottom: bool = false,
     remove_unused: bool = false,
+    allow_inline_imports: bool = false,
     help: bool = false,
     version: bool = false,
 
@@ -895,6 +900,7 @@ pub fn parseArgs(
     var show_version = false;
     var bottom = false;
     var remove_unused = false;
+    var allow_inline_imports = false;
 
     var targets: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer targets.deinit(allocator);
@@ -920,6 +926,8 @@ pub fn parseArgs(
             bottom = true;
         } else if (std.mem.eql(u8, arg, "--remove-unused")) {
             remove_unused = true;
+        } else if (std.mem.eql(u8, arg, "--allow-inline-imports")) {
+            allow_inline_imports = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             err_msg.* = try allocFmt(allocator, "Unknown option '{s}'", .{arg});
             return error.UnexpectedArg;
@@ -944,6 +952,7 @@ pub fn parseArgs(
             .banned_prefixes = banned_prefixes,
             .bottom = bottom,
             .remove_unused = remove_unused,
+            .allow_inline_imports = allow_inline_imports,
             .help = help,
             .version = show_version,
         };
@@ -962,6 +971,7 @@ pub fn parseArgs(
         .banned_prefixes = banned_prefixes,
         .bottom = bottom,
         .remove_unused = remove_unused,
+        .allow_inline_imports = allow_inline_imports,
     };
 }
 
@@ -1028,6 +1038,7 @@ fn printHelp(io: compat.Io, use_color: bool) void {
         \\  {[2]s}--ban-prefix <p>{[1]s}   Reject import paths starting with this prefix (repeatable)
         \\  {[2]s}--bottom{[1]s}          Place the import block at the end of the file
         \\  {[2]s}--remove-unused{[1]s}   Drop imports and aliases no code references
+        \\  {[2]s}--allow-inline-imports{[1]s} Accept @import outside the import block
         \\  {[2]s}-h, --help{[1]s}         Show this help message
         \\  {[2]s}--version{[1]s}          Print version and exit
         \\
@@ -1182,6 +1193,7 @@ fn runMain(allocator: std.mem.Allocator, args: []const []const u8, io: compat.Io
                     .banned_prefixes = parsed.banned_prefixes.items,
                     .bottom = parsed.bottom,
                     .remove_unused = parsed.remove_unused,
+                    .allow_inline_imports = parsed.allow_inline_imports,
                 },
             };
             initialized += 1;

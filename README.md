@@ -77,6 +77,8 @@ Options:
   --ban-prefix <p>   Reject imports starting with <p> (repeatable)
   --bottom           Place the import block at the end of the file
   --remove-unused    Drop imports and aliases no code references (opt-in)
+  --allow-inline-imports
+                     Accept @import outside the import block (opt-in)
   -h, --help         Show help
   --version          Print version
 ```
@@ -88,6 +90,7 @@ zsort check src/ build.zig                        # mixed targets
 zsort check . --ban-prefix ./ --ban-prefix src/   # ban relative paths
 zsort fix . --bottom                              # imports at the end of the file
 zsort fix . --remove-unused                       # also prune dead imports
+zsort check . --allow-inline-imports              # allow switch-arm / test-local imports
 ```
 
 - `check` prints unified diffs for files that need changes.

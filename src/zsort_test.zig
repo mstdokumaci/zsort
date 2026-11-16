@@ -2015,3 +2015,54 @@ test "processSource: --remove-unused keeps a trailing comment without a leading 
     try std.testing.expect(result.changed);
     try std.testing.expectEqualStrings("// Explains the body.\npub fn main() void {}\n", result.new_text);
 }
+
+test "processSource: --allow-inline-imports accepts inline @import" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\const impl = switch (@import("builtin").os.tag) {
+        \\    .windows => @import("ipc_windows.zig"),
+        \\    else => @import("ipc_posix.zig"),
+        \\};
+        \\
+    ;
+    const strict = try zsort.processSource(std.testing.allocator, source, .{});
+    defer std.testing.allocator.free(strict.new_text);
+    defer std.testing.allocator.free(strict.new_block);
+    defer if (strict.banned_msg) |msg| std.testing.allocator.free(msg);
+    try std.testing.expect(strict.banned);
+
+    const relaxed = try zsort.processSource(std.testing.allocator, source, .{ .allow_inline_imports = true });
+    defer std.testing.allocator.free(relaxed.new_text);
+    defer std.testing.allocator.free(relaxed.new_block);
+    try std.testing.expect(!relaxed.banned);
+    try std.testing.expect(!relaxed.changed);
+}
+
+test "processSource: --allow-inline-imports still enforces --ban-prefix" {
+    const source =
+        \\const std = @import("std");
+        \\
+        \\fn get() type {
+        \\    return @import("./impl.zig").Impl;
+        \\}
+        \\
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, .{
+        .banned_prefixes = &.{"./"},
+        .allow_inline_imports = true,
+    });
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    const msg = result.banned_msg orelse return error.TestFailed;
+    defer std.testing.allocator.free(msg);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "./") != null);
+}
+
+test "parseArgs: --allow-inline-imports" {
+    const args = [_][]const u8{ "zsort", "check", "src", "--allow-inline-imports" };
+    var msg: ?[]const u8 = null;
+    var parsed = try zsort.parseArgs(std.testing.allocator, &args, &msg);
+    defer parsed.deinit(std.testing.allocator);
+    try std.testing.expect(parsed.allow_inline_imports);
+}
