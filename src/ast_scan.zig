@@ -358,10 +358,20 @@ fn importHeadOffset(tree: Ast, init: Ast.Node.Index) ?usize {
 /// instead of being swallowed by the rebuilt block.
 fn lineBlockEnd(source: []const u8, imports: []const Import, aliases: []const Import) usize {
     var pos: usize = 0;
+    // Start of the comment run that opens with a `///` doc comment: it
+    // documents the next decl, so a block that ends at that decl ends here.
+    var doc_run_start: ?usize = null;
     while (pos < source.len) {
         const le = findLineEnd(source, pos);
         const trimmed = std.mem.trimStart(u8, source[pos..le], " \t\n\r");
-        if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "//")) {
+        if (trimmed.len == 0) {
+            doc_run_start = null;
+            pos = le;
+            continue;
+        }
+        if (std.mem.startsWith(u8, trimmed, "//")) {
+            const is_doc = std.mem.startsWith(u8, trimmed, "///") and !std.mem.startsWith(u8, trimmed, "////");
+            if (is_doc and doc_run_start == null) doc_run_start = pos;
             pos = le;
             continue;
         }
@@ -378,7 +388,8 @@ fn lineBlockEnd(source: []const u8, imports: []const Import, aliases: []const Im
                 break;
             }
         };
-        if (!covered) return pos;
+        if (!covered) return doc_run_start orelse pos;
+        doc_run_start = null;
         pos = le;
     }
     return pos;
