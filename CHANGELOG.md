@@ -13,6 +13,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expressions) instead of reporting them as banned; `--ban-prefix` still
   applies to them
 
+### Fixed
+
+- A `///` doc comment on the first decl after the import block stays attached
+  to that decl when `fix` hoists a stray import, instead of being split from
+  it by the separating blank line
+
 ## [0.9.0] - 2026-10-21
 
 ### Added

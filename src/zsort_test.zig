@@ -2066,3 +2066,38 @@ test "parseArgs: --allow-inline-imports" {
     defer parsed.deinit(std.testing.allocator);
     try std.testing.expect(parsed.allow_inline_imports);
 }
+
+test "processSource: hoisting a stray keeps the next decl's doc comment attached" {
+    const source =
+        \\const std = @import("std");
+        \\const Module = std.Build.Module;
+        \\
+        \\/// Docs for Manifest.
+        \\const Manifest = struct {
+        \\    id: []const u8,
+        \\};
+        \\const manifest: Manifest = @import("app.zon");
+        \\
+        \\pub fn main() void {}
+        \\
+    ;
+    const result = try zsort.processSource(std.testing.allocator, source, .{});
+    defer std.testing.allocator.free(result.new_text);
+    defer std.testing.allocator.free(result.new_block);
+    try std.testing.expect(result.changed);
+    try std.testing.expectEqualStrings(
+        \\const std = @import("std");
+        \\
+        \\const manifest: Manifest = @import("app.zon");
+        \\
+        \\const Module = std.Build.Module;
+        \\
+        \\/// Docs for Manifest.
+        \\const Manifest = struct {
+        \\    id: []const u8,
+        \\};
+        \\
+        \\pub fn main() void {}
+        \\
+    , result.new_text);
+}
